@@ -6,14 +6,12 @@ if(pdfjs) pdfjs.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 
 /* ---------- Service worker: sin internet y con varios núcleos para la voz ---------- */
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js').then(()=>{
-    // La primera vez que el service worker toma el control, recargar para activar el modo de varios núcleos.
-    if(!self.crossOriginIsolated && navigator.serviceWorker.controller && !sessionStorage.getItem('lectora-recarga')){
-      sessionStorage.setItem('lectora-recarga', '1'); location.reload();
-    }
-  }).catch(()=>{});
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+  // Cuando una versión nueva del service worker toma el control, recargar una vez: así la página
+  // queda aislada (COOP/COEP) y la voz puede usar varios núcleos.
   navigator.serviceWorker.addEventListener('controllerchange', ()=>{
-    if(!self.crossOriginIsolated && !sessionStorage.getItem('lectora-recarga')){ sessionStorage.setItem('lectora-recarga', '1'); location.reload(); }
+    const n = +(sessionStorage.getItem('lectora-recargas') || 0);
+    if(!self.crossOriginIsolated && n < 2){ sessionStorage.setItem('lectora-recargas', n + 1); location.reload(); }
   });
 }
 try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
