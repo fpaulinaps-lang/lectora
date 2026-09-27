@@ -1,0 +1,213 @@
+// Motor de voz dentro del teléfono: Kokoro (voz natural) + conversor de timbre (tu voz).
+// Todo corre en el aparato; los modelos se descargan una vez y quedan guardados.
+//
+// Con tarjeta gráfica (WebGPU) el cálculo va en un proceso aparte (voz-worker.js) y la pantalla no se congela.
+// Sin ella, corre en la página con varios núcleos del procesador: más lento, y la pantalla se traba un poco
+// mientras genera.
+import { fonemasEs } from './es-fonemas.js';
+import { crearNucleo, remuestrear } from './nucleo.js';
+export { remuestrear };
+
+const HF = 'https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/';
+const CACHE = 'lectora-modelos-v1';
+export const SR = 24000;          // Kokoro
+const SR_CONV = 22050;            // conversor de timbre
+export const VOCES = {
+  es: [{id:'ef_dora', nombre:'Dora', tipo:'mujer'}, {id:'em_alex', nombre:'Álex', tipo:'hombre'}],
+  en: [{id:'af_heart', nombre:'Heart', tipo:'mujer'}, {id:'af_bella', nombre:'Bella', tipo:'mujer'},
+       {id:'am_michael', nombre:'Michael', tipo:'hombre'}, {id:'am_fenrir', nombre:'Fenrir', tipo:'hombre'}],
+};
+
+let GPU = false;
+export function configurar({gpu = false} = {}){ GPU = gpu; }
+export const usaGPU = () => GPU;
+const modeloKokoro = () => HF + 'onnx/' + (GPU ? 'model.onnx' : 'model_quantized.onnx');
+export const tamanoVoz = () => GPU ? 326 : 92;   // MB que se descargan la primera vez
+
+/* ---------- descargas con memoria ---------- */
+async function traer(url, alAvanzar){
+  let cache = null;
+  try{ cache = await caches.open(CACHE); const hit = await cache.match(url); if(hit) return new Uint8Array(await hit.arrayBuffer()); }catch(e){}
+  const r = await fetch(url);
+  if(!r.ok) throw new Error('No se pudo descargar ' + url.split('/').pop() + ' (' + r.status + '). Revisa tu conexión.');
+  const total = +r.headers.get('content-length') || 0;
+  let datos;
+  if(r.body && total && alAvanzar){
+    const lector = r.body.getReader(); datos = new Uint8Array(total); let n = 0;
+    for(;;){ const {done, value} = await lector.read(); if(done) break;
+      if(n + value.length > datos.length){ const d2 = new Uint8Array(Math.max(datos.length*2, n+value.length)); d2.set(datos); datos = d2; }
+      datos.set(value, n); n += value.length; alAvanzar(n, total); }
+    datos = datos.subarray(0, n);
+  } else datos = new Uint8Array(await r.arrayBuffer());
+  try{ if(cache) await cache.put(url, new Response(datos, {headers:{'content-type':'application/octet-stream'}})); }catch(e){}
+  return datos;
+}
+const copia = u8 => u8.slice().buffer;          // ArrayBuffer propio, transferible
+
+// Pesos guardados en media precisión: se expanden a float32 al cargar.
+const MITAD = (()=>{
+  const t = new Float32Array(65536);
+  for(let h = 0; h < 65536; h++){
+    const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 0x1f, f = h & 0x3ff;
+    t[h] = e === 0 ? s * Math.pow(2, -14) * (f / 1024) : e === 31 ? (f ? NaN : s * Infinity) : s * Math.pow(2, e - 15) * (1 + f / 1024);
+  }
+  return t;
+})();
+function expandir(u8){
+  const u16 = new Uint16Array(u8.buffer, u8.byteOffset, u8.byteLength / 2);
+  const f = new Float32Array(u16.length);
+  for(let i = 0; i < u16.length; i++) f[i] = MITAD[u16[i]];
+  return f.buffer;
+}
+
+/* ---------- el núcleo: en un proceso aparte (GPU) o en la página (CPU) ---------- */
+async function nucleoCPU(){
+  const ort = await import('../vendor/ort/ort.wasm.min.mjs');
+  ort.env.wasm.wasmPaths = new URL('../vendor/ort/', import.meta.url).href;
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
+  return crearNucleo(ort, false);
+}
+let nucleoP = null;
+function nucleo(){
+  if(nucleoP) return nucleoP;
+  nucleoP = (async ()=>{
+    if(GPU){
+      const w = new Worker(new URL('./voz-worker.js', import.meta.url), {type:'module'});
+      const pendientes = new Map(); let n = 0;
+      const gpuEnProceso = await new Promise((res, rej)=>{
+        w.onmessage = e => {
+          if(e.data.listo){ res(e.data.gpu); return; }
+          const p = pendientes.get(e.data.id); if(!p) return; pendientes.delete(e.data.id);
+          e.data.ok ? p.res(e.data.r) : p.rej(new Error(e.data.error));
+        };
+        w.onerror = e => rej(new Error('No se pudo iniciar el motor de voz: ' + (e.message || 'error')));
+      });
+      if(!gpuEnProceso){ w.terminate(); GPU = false; return nucleoCPU(); }
+      const llamar = (fn, args, transferir = []) => new Promise((res, rej)=>{
+        const id = ++n; pendientes.set(id, {res, rej}); w.postMessage({id, fn, args}, transferir);
+      });
+      return new Proxy({}, {get: (_, fn) => fn === 'then' ? undefined : (...args) => llamar(fn, args, args.filter(x => x instanceof ArrayBuffer))});
+    }
+    return nucleoCPU();
+  })();
+  nucleoP.catch(()=>{ nucleoP = null; });
+  return nucleoP;
+}
+
+/* ---------- voz natural ---------- */
+let vocab = null, kokoroListo = null;
+export function prepararVoz(alAvanzar = ()=>{}){
+  if(!kokoroListo) kokoroListo = (async ()=>{
+    const nu = await nucleo();
+    const [modelo, tok] = await Promise.all([
+      traer(modeloKokoro(), (n, t)=>alAvanzar('Descargando la voz natural', n, t)),
+      traer(HF + 'tokenizer.json'),
+    ]);
+    vocab = JSON.parse(new TextDecoder().decode(tok)).model.vocab;
+    alAvanzar('Preparando la voz', 1, 1);
+    await nu.cargarKokoro(copia(modelo));
+  })();
+  kokoroListo.catch(()=>{ kokoroListo = null; });
+  return kokoroListo;
+}
+const vocesCargadas = new Map();
+async function estiloDe(id){
+  if(!vocesCargadas.has(id)){
+    const b = await traer(HF + 'voices/' + id + '.bin');
+    vocesCargadas.set(id, new Float32Array(b.slice().buffer));
+  }
+  return vocesCargadas.get(id);
+}
+let fonemasEn = null;
+async function fonemas(texto, lang){
+  if(lang === 'es') return fonemasEs(texto);
+  if(!fonemasEn){
+    const m = await import(new URL('../vendor/phonemizer.js', import.meta.url).href);
+    fonemasEn = async t => {
+      const partes = t.replace(/[‘’]/g, "'").replace(/[“”«»]/g, '"').split(/(\s*[;:,.!?—…"()]+\s*)/);
+      let out = '';
+      for(const p of partes){ if(!p) continue; out += /^[\s;:,.!?—…"()]+$/.test(p) ? p : (await m.phonemize(p, 'en-us')).join(' '); }
+      return out.replace(/ʲ/g, 'j').replace(/r/g, 'ɹ').replace(/x/g, 'k').replace(/ɬ/g, 'l')
+                .replace(/(?<=nˈaɪn)ti(?!ː)/g, 'di').replace(/ z(?=[;:,.!?—…" ]|$)/g, 'z').trim();
+    };
+  }
+  return fonemasEn(texto);
+}
+// Devuelve el audio (24 kHz) de una frase.
+export async function hablar(texto, lang, vozId, velocidad = 1){
+  await prepararVoz();
+  const ps = await fonemas(texto, lang);
+  const ids = [...ps].map(c => vocab[c]).filter(x => x !== undefined);
+  const estilo = await estiloDe(vozId);
+  const nu = await nucleo();
+  const trozos = [];
+  for(let i = 0; i < ids.length; ){                       // Kokoro acepta hasta 510 fonemas por vez
+    let fin = Math.min(ids.length, i + 500);
+    if(fin < ids.length){ const esp = ids.lastIndexOf(vocab[' '], fin); if(esp > i + 100) fin = esp; }
+    const parte = ids.slice(i, fin), n = Math.min(parte.length, 509);
+    trozos.push(await nu.kokoro(parte, estilo.slice(256 * n, 256 * n + 256), velocidad));
+    i = fin;
+  }
+  return unir(trozos);
+}
+function unir(ts){ const n = ts.reduce((a, t) => a + t.length, 0); const o = new Float32Array(n); let k = 0; for(const t of ts){ o.set(t, k); k += t.length; } return o; }
+
+/* ---------- tu voz ---------- */
+let huellaLista = null, convListo = null;
+export function prepararHuella(){
+  if(!huellaLista) huellaLista = (async ()=>{
+    const h = await traer(new URL('./huella.onnx', import.meta.url).href);
+    await (await nucleo()).cargarHuella(copia(h));
+  })();
+  huellaLista.catch(()=>{ huellaLista = null; });
+  return huellaLista;
+}
+export function prepararConversor(alAvanzar = ()=>{}){
+  if(!convListo) convListo = (async ()=>{
+    const base = new URL('./', import.meta.url).href;
+    const tam = {conv_a: 19.7e6, conv_b: 17.3e6, conv_c: 28.9e6}, hecho = {};
+    const total = Object.values(tam).reduce((x, y) => x + y);
+    const bajados = await Promise.all(Object.keys(tam).flatMap(p => [
+      traer(base + p + '.onnx'),
+      traer(base + p + '.f16', (n)=>{ hecho[p] = n; alAvanzar('Descargando el conversor de tu voz', Object.values(hecho).reduce((x, y) => x + y, 0), total); }),
+    ]));
+    alAvanzar('Preparando tu voz', 1, 1);
+    const [a, aP, b, bP, c, cP] = bajados;
+    await (await nucleo()).cargarConversor({a: copia(a), aPesos: expandir(aP), b: copia(b), bPesos: expandir(bP), c: copia(c), cPesos: expandir(cP)});
+    await prepararHuella();
+  })();
+  convListo.catch(()=>{ convListo = null; });
+  return convListo;
+}
+// Huella del timbre (256 números) a partir de audio a cualquier frecuencia.
+export async function huellaDe(audio, sr){
+  await prepararHuella();
+  return await (await nucleo()).huella(Float32Array.from(audio), sr);
+}
+// El cambio de frecuencia también se hace en el núcleo, para no trabar la pantalla.
+export async function convertir(audio24, src, tgt){
+  await prepararConversor();
+  return await (await nucleo()).convertir(Float32Array.from(audio24), Float32Array.from(src), Float32Array.from(tgt), SR);
+}
+export function parecido(a, b){
+  let d = 0, na = 0, nb = 0;
+  for(let i = 0; i < a.length; i++){ d += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+  return d / Math.sqrt(na * nb);
+}
+
+/* ---------- utilidades de audio ---------- */
+export function recortar(a){
+  let i = 0, j = a.length - 1;
+  while(i < j && Math.abs(a[i]) < 0.01) i++;
+  while(j > i && Math.abs(a[j]) < 0.01) j--;
+  return a.slice(Math.max(0, i - 480), Math.min(a.length, j + 960));
+}
+export function wav(a, sr = SR){
+  const b = new ArrayBuffer(44 + a.length * 2), v = new DataView(b);
+  const w = (o, s) => { for(let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + a.length * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, a.length * 2, true);
+  for(let i = 0; i < a.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, a[i])) * 32767, true);
+  return new Blob([b], {type:'audio/wav'});
+}

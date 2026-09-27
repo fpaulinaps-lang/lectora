@@ -12,14 +12,14 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>Lectora</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap">
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap">
 <style>
 :root{
   --bg:#EEF1EF; --paper:#FAFBFA; --ink:#1B2321; --muted:#5D6A66; --line:#D5DCD9;
   --accent:#0E6B63; --accent-ink:#FFFFFF; --accent-soft:#D7E9E5;
-  --mark:rgba(240,190,60,.40); --err:#A33A2B;
+  --mark:rgba(240,190,60,.40); --err:#A33A2B; --rec:#C0392B;
   --ui:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
   --read:"Literata",Georgia,"Times New Roman",serif;
 }
@@ -28,47 +28,66 @@
     color-scheme:dark;
     --bg:#101514; --paper:#171D1C; --ink:#E2E8E5; --muted:#93A29D; --line:#2A3331;
     --accent:#4CC0B2; --accent-ink:#06201D; --accent-soft:#1D3431;
-    --mark:rgba(235,185,60,.24); --err:#E88A7A;
+    --mark:rgba(235,185,60,.24); --err:#E88A7A; --rec:#F07060;
   }
 }
 :root[data-theme="dark"]{
   color-scheme:dark;
   --bg:#101514; --paper:#171D1C; --ink:#E2E8E5; --muted:#93A29D; --line:#2A3331;
   --accent:#4CC0B2; --accent-ink:#06201D; --accent-soft:#1D3431;
-  --mark:rgba(235,185,60,.24); --err:#E88A7A;
+  --mark:rgba(235,185,60,.24); --err:#E88A7A; --rec:#F07060;
 }
 *{box-sizing:border-box}
+html,body{margin:0}
 body{background:var(--bg); color:var(--ink); font-family:var(--ui); font-size:16px; line-height:1.45}
+img{max-width:100%}
+[hidden]{display:none!important}
 button,input,select{font:inherit; color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 
-.top{position:sticky; top:env(safe-area-inset-top,0px); z-index:5; background:var(--bg);
-  border-bottom:1px solid var(--line)}
+.top{position:sticky; top:0; padding-top:env(safe-area-inset-top,0px); z-index:5; background:var(--bg); border-bottom:1px solid var(--line)}
 .top-in{max-width:44rem; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:12px}
-.brand{font-family:var(--read); font-weight:600; font-size:1.15rem; letter-spacing:.01em}
+.brand{font-family:var(--read); font-weight:600; font-size:1.25rem; letter-spacing:.01em; flex:1}
+.back{background:none; border:0; color:var(--accent); font-weight:700; padding:6px 0; white-space:nowrap}
 .doc-name{flex:1; min-width:0; color:var(--muted); font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.btn{display:inline-flex; align-items:center; gap:6px; border:0; border-radius:999px; padding:9px 16px;
+.btn{display:inline-flex; align-items:center; justify-content:center; gap:6px; border:0; border-radius:999px; padding:9px 16px;
   background:var(--accent); color:var(--accent-ink); font-weight:700; font-size:.95rem; white-space:nowrap}
 .btn.ghost{background:transparent; color:var(--ink); border:1px solid var(--line)}
+.btn.rec{background:var(--rec); color:#fff}
+.btn:disabled{opacity:.5}
 .sr{position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0 0 0 0)}
 
-main{max-width:44rem; margin:0 auto; padding-inline:16px; padding-block:14px 190px; display:flex; flex-direction:column; gap:14px}
-
-.shelf{display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; scrollbar-width:none}
-.shelf::-webkit-scrollbar{display:none}
-.chip{flex:none; display:flex; align-items:center; border:1px solid var(--line); border-radius:12px; background:var(--paper); max-width:15rem}
-.chip.on{border-color:var(--accent); background:var(--accent-soft)}
-.chip button{background:none; border:0; text-align:left; padding:7px 4px 7px 12px; min-width:0}
-.chip .n{display:block; font-weight:700; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.chip .p{display:block; color:var(--muted); font-size:.78rem; font-variant-numeric:tabular-nums}
-.chip .x{padding:7px 10px; color:var(--muted); font-size:1.1rem; line-height:1}
+main{max-width:44rem; margin:0 auto; padding-inline:16px; padding-block:14px 32px; display:flex; flex-direction:column; gap:14px}
+body.leyendo main{padding-block:14px 190px}
 
 .status{border-radius:12px; padding:12px 14px; background:var(--accent-soft); font-size:.95rem}
+.status.err{background:transparent; border:1px solid var(--err); color:var(--err)}
 .install{display:flex; flex-wrap:wrap; align-items:center; gap:10px}
 .install span{flex:1 1 16rem}
-.status.err{background:transparent; border:1px solid var(--err); color:var(--err)}
+.prog{height:6px; border-radius:3px; background:var(--line); overflow:hidden; margin-top:8px}
+.prog i{display:block; height:100%; width:0; background:var(--accent); transition:width .3s}
 
+/* Biblioteca */
+.lib-head{display:flex; align-items:baseline; justify-content:space-between; gap:12px}
+.lib-head h1{font-family:var(--read); font-size:1.5rem; margin:0}
+.lib-head span{color:var(--muted); font-size:.88rem; font-variant-numeric:tabular-nums}
+.shelf{list-style:none; margin:12px 0 0; padding:0; display:grid; gap:10px}
+.book{display:grid; grid-template-columns:44px 1fr auto; gap:14px; align-items:center; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 8px 12px 14px}
+.book.cont{border-color:var(--accent)}
+.spine{width:44px; height:58px; border-radius:3px 6px 6px 3px; background:var(--accent); color:var(--accent-ink); display:grid; place-items:center;
+  font-family:var(--read); font-weight:600; font-size:1.2rem; box-shadow:inset 4px 0 0 rgba(0,0,0,.18)}
+.book[data-kind="audio"] .spine{background:#6B4E9B; color:#fff}
+.book[data-kind="ejemplo"] .spine{background:var(--line); color:var(--muted)}
+.book-open{background:none; border:0; text-align:left; padding:0; min-width:0; display:flex; flex-direction:column; gap:3px}
+.book-title{font-family:var(--read); font-weight:600; font-size:1.05rem; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.book-meta{color:var(--muted); font-size:.82rem; font-variant-numeric:tabular-nums}
+.book .prog{margin-top:4px; height:4px}
+.book-x{background:none; border:0; color:var(--muted); font-size:1.3rem; line-height:1; padding:8px}
+.book-x.confirm{font-size:.82rem; font-weight:700; color:var(--err); border:1px solid var(--err); border-radius:999px; padding:6px 10px}
+.tag{display:inline-block; font-size:.66rem; letter-spacing:.08em; text-transform:uppercase; font-weight:700; color:var(--accent); border:1px solid currentColor; border-radius:4px; padding:0 4px; margin-left:4px; vertical-align:1px}
+
+/* Lector */
 .page{background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:22px 20px 26px}
 .folio{font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-bottom:14px; display:flex; justify-content:space-between}
 .text{font-family:var(--read); font-size:1.18rem; line-height:1.72; margin:0; hyphens:auto; -webkit-hyphens:auto}
@@ -77,29 +96,41 @@ main{max-width:44rem; margin:0 auto; padding-inline:16px; padding-block:14px 190
 .s:hover{background:var(--accent-soft)}
 .s.on{background:var(--mark); box-shadow:0 0 0 2px var(--mark)}
 .empty{color:var(--muted); font-style:italic}
-
-.pager{display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--muted); font-size:.92rem}
+.pager{display:flex; align-items:center; justify-content:center; gap:18px; color:var(--muted); font-size:.92rem; margin-top:14px}
+.pager .btn{font-size:1.3rem; padding:4px 18px; line-height:1.2}
 .pager .go{display:flex; align-items:center; gap:6px; font-variant-numeric:tabular-nums}
 .pager input{width:4.2em; padding:5px 6px; border:1px solid var(--line); border-radius:8px; background:var(--paper); text-align:center}
 
-.player{position:fixed; left:0; right:0; bottom:0; z-index:6; background:var(--paper); border-top:1px solid var(--line);
-  padding-bottom:env(safe-area-inset-bottom,0px)}
+.player{position:fixed; left:0; right:0; bottom:0; z-index:6; background:var(--paper); border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom,0px)}
 .bar{height:4px; background:var(--line)}
 .bar i{display:block; height:100%; width:0; background:var(--accent); transition:width .3s}
 .player-in{max-width:44rem; margin:0 auto; padding:10px 16px 12px; display:flex; flex-direction:column; gap:8px}
-.meta{display:flex; justify-content:space-between; gap:10px; font-size:.8rem; color:var(--muted); font-variant-numeric:tabular-nums}
+.meta{display:flex; justify-content:space-between; gap:10px; font-size:.8rem; color:var(--muted); font-variant-numeric:tabular-nums; flex-wrap:wrap; align-items:center}
+.link{background:none; border:0; padding:0; color:var(--accent); font-size:.8rem; font-weight:700; text-decoration:underline; text-underline-offset:2px}
 .controls{display:grid; grid-template-columns:1fr auto auto auto 1fr; align-items:center; gap:14px}
 .ic{width:48px; height:48px; border-radius:50%; border:1px solid var(--line); background:transparent; display:grid; place-items:center}
 .ic svg{width:22px; height:22px; fill:currentColor}
 .play{width:64px; height:64px; border:0; background:var(--accent); color:var(--accent-ink)}
 .play svg{width:28px; height:28px}
+.play.wait svg{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
 .side{justify-self:start; border:1px solid var(--line); background:transparent; border-radius:999px; padding:8px 12px; font-size:.85rem; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .side.r{justify-self:end; font-variant-numeric:tabular-nums}
 
+.blackout{position:fixed; inset:0; z-index:20; background:#000; color:#3a3a3a; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:6px;
+  padding-bottom:calc(48px + env(safe-area-inset-bottom,0px)); font-size:.85rem; text-align:center; user-select:none; -webkit-user-select:none}
+.blackout b{color:#4a4a4a; font-weight:400}
+
+/* Hoja de voz */
 .scrim{position:fixed; inset:0; z-index:9; background:rgba(0,0,0,.35); display:flex; align-items:flex-end; justify-content:center}
-.sheet{width:100%; max-width:44rem; max-height:88%; overflow-y:auto; background:var(--paper); border-radius:18px 18px 0 0;
+.sheet{width:100%; max-width:44rem; max-height:90%; overflow-y:auto; background:var(--paper); border-radius:18px 18px 0 0;
   padding:18px 16px calc(20px + env(safe-area-inset-bottom,0px)); display:flex; flex-direction:column; gap:16px}
 .sheet h2{font-family:var(--read); font-size:1.25rem; margin:0; display:flex; justify-content:space-between; align-items:center}
+.seg{display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+.seg button{border:0; background:transparent; padding:10px 6px; font-size:.9rem; font-weight:700; color:var(--muted); border-left:1px solid var(--line)}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
+.panel{display:flex; flex-direction:column; gap:12px}
 .field{display:flex; flex-direction:column; gap:6px}
 .field label,.lbl{font-size:.75rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:700}
 .field select{padding:11px 10px; border-radius:10px; border:1px solid var(--line); background:var(--bg); width:100%}
@@ -107,58 +138,54 @@ main{max-width:44rem; margin:0 auto; padding-inline:16px; padding-block:14px 190
 input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
 .check{display:flex; align-items:center; gap:8px; font-size:.92rem}
 .check input{accent-color:var(--accent); width:18px; height:18px}
+.hint{color:var(--muted); font-size:.85rem; margin:0}
+.note{background:var(--accent-soft); border-radius:10px; padding:10px 12px; font-size:.92rem; margin:0}
+.script{font-family:var(--read); font-size:1.05rem; line-height:1.6; background:var(--bg); border-radius:10px; padding:12px 14px; margin:0}
+.meter{height:10px; border-radius:5px; background:var(--line); overflow:hidden}
+.meter i{display:block; height:100%; width:0; background:var(--rec); transition:width .08s}
 .tips{border-top:1px solid var(--line); padding-top:14px; font-size:.92rem; display:flex; flex-direction:column; gap:10px}
 .tips p{margin:0}
-.tips b{font-weight:700}
-.path{font-family:var(--ui); background:var(--bg); border-radius:6px; padding:1px 6px}
-.hint{color:var(--muted); font-size:.85rem; margin:0}
-@media (prefers-reduced-motion: reduce){ .bar i,.s{transition:none} }
-html,body{margin:0}
-img{max-width:100%}
-[hidden]{display:none!important}
-.top{top:0; padding-top:env(safe-area-inset-top,0px)}
-</style>
-<style>
-.meta{flex-wrap:wrap; align-items:center}
-.pager .btn{font-size:1.3rem; padding:4px 18px; line-height:1.2}
-.pager{justify-content:center; gap:18px}
-.link{background:none; border:0; padding:0; color:var(--accent); font-size:.8rem; font-weight:700; text-decoration:underline; text-underline-offset:2px}
-.tag{display:inline-block; font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; font-weight:700; color:var(--accent); border:1px solid currentColor; border-radius:4px; padding:0 4px; margin-left:4px; vertical-align:1px}
-.blackout{position:fixed; inset:0; z-index:20; background:#000; color:#3a3a3a; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:6px;
-  padding-bottom:calc(48px + env(safe-area-inset-bottom,0px)); font-size:.85rem; text-align:center; user-select:none; -webkit-user-select:none}
-.blackout b{color:#4a4a4a; font-weight:400}
-.note{background:var(--accent-soft); border-radius:10px; padding:10px 12px; font-size:.92rem; margin:0}
+@media (prefers-reduced-motion: reduce){ .bar i,.s,.prog i{transition:none} .play.wait svg{animation:none} }
 </style>
 </head>
 <body>
 
 <header class="top"><div class="top-in">
-  <div class="brand">Lectora</div>
-  <div class="doc-name" id="docName">Ejemplo</div>
-  <label class="btn" for="file">Abrir</label>
-  <input class="sr" type="file" id="file" accept="application/pdf,.pdf,application/zip,.zip">
+  <button class="back" id="backBtn" hidden>‹ Biblioteca</button>
+  <div class="brand" id="brand">Lectora</div>
+  <div class="doc-name" id="docName" hidden></div>
+  <label class="btn" for="file" id="addBtn">+ Agregar</label>
+  <input class="sr" type="file" id="file" multiple accept="application/pdf,.pdf,application/zip,.zip">
 </div></header>
 
 <main>
-  <div class="shelf" id="shelf"></div>
   <div class="status install" id="install" hidden>
     <span id="installText"></span>
     <button class="btn ghost" id="installBtn" hidden>Instalar</button>
     <button class="btn ghost" id="installClose">Entendido</button>
   </div>
-  <div class="status" id="status" hidden></div>
-  <article class="page" id="page"></article>
-  <nav class="pager">
-    <button class="btn ghost" id="prevPage" aria-label="Página anterior">‹</button>
-    <div class="go"><label for="pageInput">Pág.</label> <input type="number" id="pageInput" min="1" inputmode="numeric"> / <span id="pageCount">1</span></div>
-    <button class="btn ghost" id="nextPage" aria-label="Página siguiente">›</button>
-  </nav>
+  <div class="status" id="status" hidden><span id="statusText"></span><div class="prog" id="statusProg" hidden><i></i></div></div>
+
+  <section id="libView">
+    <div class="lib-head"><h1>Tu biblioteca</h1><span id="libCount"></span></div>
+    <ul class="shelf" id="shelf"></ul>
+    <p class="hint" style="margin-top:14px">Toca «+ Agregar» para sumar PDFs; puedes elegir varios a la vez. Quedan guardados en el teléfono y desde aquí los abres cuando quieras.</p>
+  </section>
+
+  <section id="readView" hidden>
+    <article class="page" id="page"></article>
+    <nav class="pager">
+      <button class="btn ghost" id="prevPage" aria-label="Página anterior">‹</button>
+      <div class="go"><label for="pageInput">Pág.</label> <input type="number" id="pageInput" min="1" inputmode="numeric"> / <span id="pageCount">1</span></div>
+      <button class="btn ghost" id="nextPage" aria-label="Página siguiente">›</button>
+    </nav>
+  </section>
 </main>
 
-<div class="player">
+<div class="player" id="player" hidden>
   <div class="bar"><i id="bar"></i></div>
   <div class="player-in">
-    <div class="meta"><span id="where">Página 1 de 2</span><span id="left"></span><button class="link" id="blackBtn">Pantalla negra</button></div>
+    <div class="meta"><span id="where"></span><span id="left"></span><button class="link" id="blackBtn">Pantalla negra</button></div>
     <div class="controls">
       <button class="side" id="voiceBtn">Voz</button>
       <button class="ic" id="prev" aria-label="Frase anterior"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
@@ -169,700 +196,75 @@ img{max-width:100%}
   </div>
 </div>
 
-<div class="blackout" id="blackout" hidden>
-  <b id="blackText">Leyendo…</b>
-  <span>Toca dos veces para volver</span>
-</div>
+<div class="blackout" id="blackout" hidden><b id="blackText">Leyendo…</b><span>Toca dos veces para volver</span></div>
 
 <div class="scrim" id="scrim" hidden>
   <div class="sheet" role="dialog" aria-label="Voz y velocidad">
-    <h2>Voz y velocidad <button class="btn ghost" id="closeSheet">Listo</button></h2>
+    <h2>Voz <button class="btn ghost" id="closeSheet">Listo</button></h2>
     <p class="note" id="audioNote" hidden></p>
-    <div id="ttsVoices">
-      <div class="field">
-        <label for="voiceEs">Voz en español</label>
-        <select id="voiceEs"></select>
+
+    <div id="engineBox" class="panel">
+      <div class="seg" role="group" aria-label="Tipo de voz">
+        <button data-engine="sistema" aria-pressed="false">Teléfono</button>
+        <button data-engine="natural" aria-pressed="false">Natural</button>
+        <button data-engine="mivoz" aria-pressed="false">Mi voz</button>
       </div>
-      <div class="field" style="margin-top:12px">
-        <label for="voiceEn">Voz en inglés</label>
-        <select id="voiceEn"></select>
+
+      <div class="panel" data-panel="sistema">
+        <p class="hint">Las voces que trae tu teléfono. Gastan poco, pero suenan más robóticas y necesitan la pantalla encendida.</p>
+        <div class="field"><label for="voiceEs">Voz en español</label><select id="voiceEs"></select></div>
+        <div class="field"><label for="voiceEn">Voz en inglés</label><select id="voiceEn"></select></div>
+        <label class="check"><input type="checkbox" id="allLangs"> Mostrar voces de todos los idiomas</label>
+        <p class="hint" id="voiceNote"></p>
       </div>
-      <label class="check" style="margin-top:10px"><input type="checkbox" id="allLangs"> Mostrar voces de todos los idiomas</label>
-      <p class="hint" style="margin-top:8px">Cada frase se lee con la voz de su idioma, así que un texto que mezcla español e inglés suena bien.</p>
+
+      <div class="panel" data-panel="natural">
+        <p class="hint">Voces naturales que el propio teléfono genera, sin internet ni límites. Puedes bloquear la pantalla mientras escuchas.</p>
+        <div class="field"><label for="natEs">Voz en español</label><select id="natEs"></select></div>
+        <div class="field"><label for="natEn">Voz en inglés</label><select id="natEn"></select></div>
+      </div>
+
+      <div class="panel" data-panel="mivoz">
+        <div id="recEmpty" class="panel">
+          <p class="hint">Graba 25 segundos leyendo este texto en voz alta, con tu tono normal y en un lugar sin ruido. Con eso la Lectora le pone tu timbre a la voz natural.</p>
+          <p class="script">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención. Por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden. Hoy voy a leer algunos documentos importantes, página por página, hasta terminarlos.</p>
+        </div>
+        <p class="note" id="recDone" hidden>Tu voz está lista. Se parece a ti en el tono; no copia tu acento ni tu manera de hablar.</p>
+        <div id="recLive" class="panel" hidden>
+          <div class="meter"><i id="recLevel"></i></div>
+          <p class="hint" id="recTime">Grabando… 25 s</p>
+        </div>
+        <div class="row">
+          <button class="btn rec" id="recBtn">● Grabar mi voz</button>
+          <button class="btn ghost" id="recPlay" hidden>Escuchar grabación</button>
+        </div>
+      </div>
+
+      <div class="row"><button class="btn ghost" id="test">Probar esta voz</button><span class="hint" id="testNote"></span></div>
+      <p class="hint" id="dlNote"></p>
     </div>
+
     <div class="field">
       <span class="lbl">Velocidad</span>
       <div class="row"><input type="range" id="rate" min="0.6" max="2.2" step="0.05" value="1"><b id="rateVal" style="font-variant-numeric:tabular-nums;min-width:3.5em;text-align:right">1,0×</b></div>
     </div>
-    <div class="row" id="testRow"><button class="btn" id="test">Probar voces</button><p class="hint" id="voiceNote"></p></div>
+
+    <div class="panel" id="prepBox" hidden>
+      <span class="lbl">Preparar el libro</span>
+      <p class="hint">Genera de una vez la voz de todo el libro, idealmente con el teléfono cargando y esta pantalla abierta. Después, escucharlo casi no gasta batería.</p>
+      <div class="row"><button class="btn ghost" id="prepBtn">Preparar libro</button><span class="hint" id="prepNote"></span></div>
+    </div>
+
     <div class="tips">
-      <span class="lbl">¿Suena robótica? Usa tu voz o una voz natural</span>
-      <p>Las voces del teléfono tienen ese límite. Para escuchar un PDF <b>con tu propia voz</b> o con una voz natural, conviértelo en audio con el <b>Estudio Lectora</b> de tu Mac (carpeta <span class="path">LectoraEstudio</span> en tu usuario). Después pasa el .zip al celular por AirDrop y ábrelo aquí con <b>Abrir</b>.</p>
       <span class="lbl">Batería</span>
-      <p>Los audios del Mac son lo que menos batería gasta: puedes <b>bloquear el teléfono</b> y siguen sonando.</p>
-      <p>Con las voces del teléfono la pantalla tiene que seguir encendida. Usa <b>Pantalla negra</b>: en iPhone y en la mayoría de los Android, una pantalla completamente negra casi no gasta.</p>
-      <span class="lbl">Mejores voces del teléfono</span>
-      <p><b>iPhone:</b> <span class="path">Ajustes › Accesibilidad › Contenido leído › Voces</span>, entra a <b>Español</b> y a <b>English</b> y descarga voces que digan <b>Mejorada</b> o <b>Premium</b>.</p>
-      <p><b>Android:</b> <span class="path">Ajustes › Sistema › Idiomas › Salida de texto a voz</span> › Servicios de voz de Google › instala español e inglés.</p>
+      <p><b>Teléfono:</b> la voz que menos procesa, pero la pantalla tiene que quedar encendida. Usa <b>Pantalla negra</b>.</p>
+      <p><b>Natural y Mi voz:</b> el teléfono genera la voz mientras escuchas y eso gasta más, pero puedes bloquear la pantalla. Lo más económico es preparar el libro mientras carga.</p>
+      <p>Los audios del <b>Estudio Lectora</b> del Mac también se abren aquí con «+ Agregar».</p>
     </div>
   </div>
 </div>
 
 <script src="vendor/pdf.min.js"></script>
-<script>
-(function(){
-const $ = s => document.querySelector(s);
-const synth = window.speechSynthesis;
-const pdfjs = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
-if(pdfjs) pdfjs.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
-if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
-
-const SAMPLE = {key:'ejemplo', name:'Ejemplo: cómo usar la Lectora', sample:true, pages:[
-  ['CÓMO USAR LA LECTORA',
-   'Esta es una página de ejemplo para que escuches cómo funciona antes de abrir tus propios archivos.',
-   'Toca Abrir, elige un PDF de tu teléfono y el texto aparecerá aquí, separado por páginas.',
-   'Luego toca el botón grande de reproducir.',
-   'La frase que se está leyendo queda marcada, y las páginas avanzan solas.',
-   'Si quieres saltar a otra parte, toca cualquier frase y la lectura seguirá desde ahí.'],
-  ['TU PROPIA VOZ',
-   'Las voces del teléfono suenan algo robóticas.',
-   'Para escuchar un documento con tu propia voz, o con una voz natural, conviértelo en audio con el Estudio Lectora de tu Mac.',
-   'Después pasa el archivo al celular por AirDrop y ábrelo aquí con el mismo botón Abrir.',
-   'Esos audios gastan muy poca batería, porque puedes bloquear el teléfono mientras escuchas.'],
-  ['ENGLISH TOO',
-   'The Lectora also reads English, and it picks the right voice for every sentence.',
-   'Un documento que mezcla los dos idiomas se lee sin que tengas que cambiar nada.']
-]};
-
-const store = {
-  get(k,d){ try{ const v = localStorage.getItem('lectora:'+k); return v==null ? d : JSON.parse(v); }catch(e){ return d; } },
-  set(k,v){ try{ localStorage.setItem('lectora:'+k, JSON.stringify(v)); }catch(e){} },
-  del(k){ try{ localStorage.removeItem('lectora:'+k); }catch(e){} }
-};
-
-/* ---------- IndexedDB: texto de cada documento y audios del Mac ---------- */
-let dbp = null;
-function idb(){
-  if(!dbp) dbp = new Promise((res,rej)=>{
-    try{
-      const r = indexedDB.open('lectora',2);
-      r.onupgradeneeded = ()=>{
-        const db = r.result;
-        if(!db.objectStoreNames.contains('docs')) db.createObjectStore('docs',{keyPath:'key'});
-        if(!db.objectStoreNames.contains('audio')) db.createObjectStore('audio');
-      };
-      r.onsuccess = ()=> res(r.result); r.onerror = ()=> rej(r.error);
-    }catch(e){ rej(e); }
-  });
-  return dbp;
-}
-async function dbDo(storeName, mode, fn){
-  try{
-    const db = await idb();
-    return await new Promise((res,rej)=>{
-      const tx = db.transaction(storeName,mode); const r = fn(tx.objectStore(storeName));
-      tx.oncomplete = ()=> res(r && r.result); tx.onerror = ()=> rej(tx.error); tx.onabort = ()=> rej(tx.error);
-    });
-  }catch(e){ return null; }
-}
-const dbPut = d => dbDo('docs','readwrite', s=>s.put(d));
-const dbGet = k => dbDo('docs','readonly', s=>s.get(k));
-const dbDel = k => Promise.all([dbDo('docs','readwrite', s=>s.delete(k)), dbDo('audio','readwrite', s=>s.delete(k))]);
-async function audioPut(k, blob){
-  try{
-    const db = await idb();
-    await new Promise((res,rej)=>{ const tx = db.transaction('audio','readwrite'); tx.objectStore('audio').put(blob,k); tx.oncomplete = res; tx.onerror = ()=>rej(tx.error); tx.onabort = ()=>rej(tx.error); });
-    return true;
-  }catch(e){ return false; }
-}
-const audioGet = k => dbDo('audio','readonly', s=>s.get(k));
-
-/* ---------- Extracción y limpieza del texto ---------- */
-function pageLines(content){
-  const lines = []; let cur = ''; let lastY = null;
-  for(const it of content.items){
-    if(typeof it.str !== 'string') continue;
-    const y = it.transform ? Math.round(it.transform[5]) : null;
-    if(lastY !== null && y !== null && Math.abs(y-lastY) > 2 && cur.trim()){ lines.push(cur); cur=''; }
-    cur += it.str;
-    if(it.hasEOL){ lines.push(cur); cur=''; }
-    if(y !== null) lastY = y;
-  }
-  if(cur.trim()) lines.push(cur);
-  return lines.map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean);
-}
-const isPageNum = l => /^[-–—\s]*(p[aá]g(ina)?\.?\s*|page\s*)?\d+(\s*(de|of|\/)\s*\d+)?[-–—\s]*$/i.test(l);
-const norm = l => l.toLowerCase().replace(/\d+/g,'#').replace(/\s+/g,' ').trim();
-function stripRepeats(pages){
-  const count = new Map();
-  pages.forEach(ls=>{
-    new Set([...ls.slice(0,2), ...ls.slice(-2)].map(norm)).forEach(k=>count.set(k,(count.get(k)||0)+1));
-  });
-  const thr = Math.max(3, pages.length*0.3);
-  return pages.map(ls=>ls.filter((l,i)=>{
-    if(isPageNum(l)) return false;
-    const edge = i<2 || i>=ls.length-2;
-    return !(pages.length>=4 && edge && l.length<120 && count.get(norm(l))>=thr);
-  }));
-}
-const isHeading = l => l.length<90 && !/[.,;:]$/.test(l) && l===l.toUpperCase() && /[A-ZÁÉÍÓÚÑ]{3}/.test(l);
-function joinLines(lines){
-  let out = '', prev = '';
-  for(const l of lines){
-    if(!out){ out = l; }
-    else if(isHeading(prev) || isHeading(l)){ out += '\n' + l; }
-    else if(/[A-Za-zÁÉÍÓÚáéíóúñÑ]-$/.test(out) && /^[a-záéíóúñü]/.test(l)){ out = out.slice(0,-1) + l; }
-    else out += ' ' + l;
-    prev = l;
-  }
-  return out;
-}
-const ABBR = /(?:\b(?:arts?|inc|núm|nº|n°|nro|sr|sra|srta|dr|dra|mr|mrs|ms|lic|etc|págs?|pp?|caps?|vol|ej|cfr|vid|op|cit|ss|sgtes?|ed|av|dto|dfl|ord|aprox|fig|tel|cía|ltda|vs|e\.g|i\.e|no|st|jr)|\b[A-Za-zÁÉÍÓÚÑ]|\d+)\.$/i;
-function chop(t, max=220){
-  const r = [];
-  while(t.length > max){
-    let cut = Math.max(t.lastIndexOf(', ',max), t.lastIndexOf('; ',max), t.lastIndexOf(': ',max));
-    if(cut < max*0.4) cut = t.lastIndexOf(' ',max);
-    if(cut <= 0) cut = max;
-    r.push(t.slice(0,cut+1).trim()); t = t.slice(cut+1).trim();
-  }
-  if(t) r.push(t);
-  return r;
-}
-function splitSentences(text){
-  const out = [];
-  for(const block of text.split(/\n+/)){
-    const parts = block.match(/[^.!?…]+(?:[.!?…]+["'»”’)\]]*|$)/g) || [];
-    let buf = '';
-    for(const p of parts){
-      buf += p;
-      const t = buf.trim();
-      if(t.length < 18 || ABBR.test(t)) continue;
-      out.push(...chop(t)); buf = '';
-    }
-    if(buf.trim()) out.push(...chop(buf.trim()));
-  }
-  return out.filter(s=>/[\p{L}\p{N}]/u.test(s));
-}
-
-/* ---------- Idioma de cada frase ---------- */
-const ES = new Set('de la que el en y los se del las un por con una su para es al lo como más pero sus le ya o este sí porque esta entre cuando muy sin sobre también me hasta hay donde quien desde todo nos durante todos uno les ni contra otros ese eso ante ellos e esto mí antes algunos qué unos yo otro otras otra él tanto esa estos mucho quienes nada muchos cual poco ella estar estas algunas algo nosotros artículo ley será podrá deberá'.split(' '));
-const EN = new Set('the of and to in is that it for was on are as with his they at be this have from or one had by but not what all were we when your can said there use an each which she do how their if will up other about out many then them these so some her would make like him into time has look two more write go see number way could people my than first been call who its now find long down day did get come made may part shall any such'.split(' '));
-function detect(s, fallback){
-  if(/[ñ¿¡áéíóú]/i.test(s)) return 'es';
-  const words = s.toLowerCase().match(/[a-záéíóúñü']+/g) || [];
-  let es = 0, en = 0;
-  for(const w of words){ if(ES.has(w)) es++; if(EN.has(w)) en++; }
-  return es > en ? 'es' : en > es ? 'en' : fallback;
-}
-
-/* ---------- Estado ---------- */
-let doc = null, flat = [], pageStarts = [], shownPage = 0;
-let idx = 0, playing = false, token = 0, lastStart = 0, stalledSince = 0;
-let voices = [], voiceBy = {es:null, en:null}, rate = store.get('rate',1), wake = null, current = null;
-const audio = new Audio(); audio.preload = 'auto';
-let audioUrl = null, lastTimeSave = 0;
-const isAudio = () => doc && doc.kind === 'audio';
-
-function setDoc(d, pos){
-  stop();
-  doc = d; flat = []; pageStarts = [];
-  let lang = 'es';
-  d.pages.forEach((sents,p)=>{
-    pageStarts.push(flat.length);
-    sents.forEach(x=>{
-      if(typeof x === 'string'){ lang = detect(x, lang); flat.push({p, t:x, l:lang}); }
-      else flat.push({p, t:x.t, l:x.l||'es', s:x.s, e:x.e});
-    });
-  });
-  idx = Math.min(Math.max(0, pos|0), Math.max(0, flat.length-1));
-  $('#docName').textContent = d.name;
-  $('#pageCount').textContent = d.pages.length;
-  $('#pageInput').max = d.pages.length;
-  store.set('last', d.key);
-  if(audioUrl){ URL.revokeObjectURL(audioUrl); audioUrl = null; audio.removeAttribute('src'); audio.load(); }
-  $('#blackBtn').hidden = isAudio();
-  $('#voiceBtn').textContent = isAudio() ? (d.voice || 'Audio') : voiceLabel();
-  renderPage(flat.length ? flat[idx].p : 0);
-  renderShelf(); updateMeta(); mediaMeta();
-}
-async function ensureAudio(){
-  if(!isAudio() || audioUrl) return !!audioUrl;
-  const blob = await audioGet(doc.key);
-  if(!blob){ showStatus('No encontré el audio de este documento en el teléfono. Ábrelo de nuevo con Abrir.', 'err'); return false; }
-  audioUrl = URL.createObjectURL(blob);
-  audio.src = audioUrl; audio.playbackRate = rate;
-  const saved = store.get('time:'+doc.key, null);
-  const t0 = saved != null ? saved : (flat[idx] ? flat[idx].s : 0);
-  const seek = ()=>{ try{ audio.currentTime = t0; }catch(e){} };
-  if(audio.readyState >= 1) seek(); else audio.addEventListener('loadedmetadata', seek, {once:true});
-  return true;
-}
-
-function renderPage(p){
-  shownPage = p;
-  const el = $('#page'); el.innerHTML = '';
-  const folio = document.createElement('div'); folio.className = 'folio';
-  folio.innerHTML = `<span>Página ${p+1}</span><span>${doc.sample ? 'Ejemplo' : isAudio() ? 'Audio' : ''}</span>`;
-  el.appendChild(folio);
-  const text = document.createElement('div'); text.className = 'text';
-  const n = (p+1 < pageStarts.length ? pageStarts[p+1] : flat.length) - pageStarts[p];
-  if(!n){
-    const e = document.createElement('p'); e.className = 'empty';
-    e.textContent = 'Esta página no tiene texto que leer (puede ser una imagen o estar en blanco).';
-    text.appendChild(e);
-  }
-  let para = document.createElement('p');
-  for(let j=0;j<n;j++){
-    const i = pageStarts[p]+j, t = flat[i].t;
-    if(isHeading(t) && para.childNodes.length){ text.appendChild(para); para = document.createElement('p'); }
-    const s = document.createElement('span'); s.className = 's'; s.dataset.i = i; s.textContent = t + ' ';
-    if(flat[i].l === 'en') s.lang = 'en';
-    para.appendChild(s);
-    if(isHeading(t)){ para.style.fontWeight = '600'; text.appendChild(para); para = document.createElement('p'); }
-  }
-  if(para.childNodes.length) text.appendChild(para);
-  el.appendChild(text);
-  $('#pageInput').value = p+1;
-  mark(false);
-}
-
-function mark(scroll){
-  document.querySelectorAll('.s.on').forEach(e=>e.classList.remove('on'));
-  const s = document.querySelector(`.s[data-i="${idx}"]`);
-  if(s){
-    s.classList.add('on');
-    if(scroll && $('#blackout').hidden){
-      const r = s.getBoundingClientRect();
-      if(r.top < 70 || r.bottom > window.innerHeight - 190) s.scrollIntoView({block:'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-    }
-  }
-}
-function showSentence(scroll, force){
-  if(!force && document.visibilityState !== 'visible') return;
-  const s = flat[idx]; if(!s) return;
-  if(s.p !== shownPage) renderPage(s.p);
-  mark(scroll); updateMeta();
-}
-
-function fmtTime(sec){
-  if(sec < 60) return 'menos de 1 min';
-  const m = Math.round(sec/60);
-  if(m < 60) return m + ' min';
-  return Math.floor(m/60) + ' h ' + (m%60) + ' min';
-}
-function updateMeta(){
-  const total = flat.length;
-  const p = total ? flat[idx].p : 0;
-  let pct, left;
-  if(isAudio() && doc.duration){
-    const t = audioUrl ? audio.currentTime : (flat[idx] ? flat[idx].s : 0);
-    pct = Math.round(t/doc.duration*100); left = (doc.duration - t)/rate;
-  } else {
-    pct = total ? Math.round(idx/Math.max(1,total-1)*100) : 0;
-    let chars = 0; for(let i=idx;i<total;i++) chars += flat[i].t.length;
-    left = chars/(15*rate);
-  }
-  $('#where').textContent = `Página ${p+1} de ${doc.pages.length} · ${pct}%`;
-  $('#left').textContent = total ? 'quedan ~' + fmtTime(left) : '';
-  $('#bar').style.width = pct + '%';
-  $('#blackText').textContent = `${playing ? 'Leyendo' : 'En pausa'} · página ${p+1} de ${doc.pages.length}`;
-}
-function save(){
-  if(!doc) return;
-  store.set('pos:'+doc.key, idx);
-  if(isAudio() && audioUrl) store.set('time:'+doc.key, audio.currentTime);
-  const lib = store.get('lib',[]); const it = lib.find(x=>x.key===doc.key);
-  if(it){ it.page = flat.length ? flat[idx].p+1 : 1; store.set('lib',lib); }
-}
-
-/* ---------- Reproducción ---------- */
-function setPlayIcon(){
-  $('#playIcon').innerHTML = playing ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>' : '<path d="M7 4v16l13-8z"/>';
-  $('#play').setAttribute('aria-label', playing ? 'Pausar' : 'Leer');
-  if('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-  if(doc) updateMeta();
-}
-async function holdScreen(on){
-  try{
-    if(on && 'wakeLock' in navigator && !wake){ wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release',()=>wake=null); }
-    if(!on && wake){ await wake.release(); wake = null; }
-  }catch(e){ wake = null; }
-}
-
-// Voces del teléfono
-function speak(){
-  const my = ++token;
-  const s = flat[idx];
-  if(!s){ stop(); return; }
-  showSentence(true); save();
-  const u = new SpeechSynthesisUtterance(s.t);
-  const v = voiceBy[s.l] || voiceBy.es;
-  if(v){ u.voice = v; u.lang = v.lang; } else u.lang = s.l === 'en' ? 'en-US' : 'es-ES';
-  u.rate = rate;
-  u.onstart = ()=>{ if(my===token) lastStart = Date.now(); };
-  u.onend = ()=>{
-    if(my!==token || !playing) return;
-    if(idx < flat.length-1){ idx++; speak(); }
-    else { stop(); showStatus('Terminaste de leer este documento.'); }
-  };
-  u.onerror = e=>{
-    if(my!==token || !playing) return;
-    if(e.error==='interrupted' || e.error==='canceled') return;
-    if(e.error==='not-allowed'){ stop(); showStatus('El teléfono bloqueó el audio. Toca el botón de reproducir otra vez.'); return; }
-    if(idx < flat.length-1){ idx++; speak(); } else stop();
-  };
-  current = u; lastStart = Date.now(); stalledSince = 0;
-  if(synth.speaking || synth.pending){
-    synth.cancel();
-    setTimeout(()=>{ if(my===token && playing) synth.speak(u); }, 90);
-  } else synth.speak(u);
-}
-// Algunos teléfonos cortan la voz sin avisar. Si pasa, retoma la frase.
-setInterval(()=>{
-  if(!playing || isAudio() || !synth) return;
-  if(synth.speaking || synth.pending){ stalledSince = 0; return; }
-  if(Date.now()-lastStart < 1500) return;
-  if(!stalledSince){ stalledSince = Date.now(); return; }
-  if(Date.now()-stalledSince > 2500 && document.visibilityState==='visible') speak();
-}, 1000);
-
-// Audios del Mac
-function sentenceAt(t){
-  let lo = 0, hi = flat.length-1, ans = 0;
-  while(lo <= hi){ const m = (lo+hi)>>1; if(flat[m].s <= t + 0.05){ ans = m; lo = m+1; } else hi = m-1; }
-  return ans;
-}
-audio.addEventListener('timeupdate', ()=>{
-  if(!isAudio() || !flat.length) return;
-  const i = sentenceAt(audio.currentTime);
-  if(i !== idx){ idx = i; showSentence(true); }
-  if(Date.now() - lastTimeSave > 4000){ lastTimeSave = Date.now(); save(); if(document.visibilityState==='visible') updateMeta(); }
-});
-audio.addEventListener('ended', ()=>{ playing = false; setPlayIcon(); store.set('time:'+doc.key, 0); showStatus('Terminaste de escuchar este documento.'); });
-audio.addEventListener('pause', ()=>{ if(isAudio() && playing){ playing = false; setPlayIcon(); save(); } });
-audio.addEventListener('play', ()=>{ if(isAudio() && !playing){ playing = true; setPlayIcon(); } });
-
-async function play(){
-  if(!flat.length) return;
-  hideStatus();
-  if(isAudio()){
-    if(!(await ensureAudio())) return;
-    playing = true; setPlayIcon();
-    try{ await audio.play(); }catch(e){ playing = false; setPlayIcon(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
-    return;
-  }
-  if(!synth){ showStatus('Este navegador no puede leer en voz alta. Abre la página en Safari o Chrome.', 'err'); return; }
-  playing = true; setPlayIcon(); holdScreen(true); speak();
-}
-function stop(){
-  const was = playing;
-  playing = false; token++;
-  if(synth) synth.cancel();
-  if(!audio.paused) audio.pause();
-  holdScreen(false);
-  if(was) save();
-  setPlayIcon();
-}
-function jump(i){
-  if(!flat.length) return;
-  idx = Math.min(Math.max(0,i), flat.length-1);
-  if(isAudio()){
-    if(audioUrl) audio.currentTime = flat[idx].s; else store.set('time:'+doc.key, flat[idx].s);
-    showSentence(true, true); save(); return;
-  }
-  if(playing) speak(); else { showSentence(true, true); save(); }
-}
-
-/* ---------- Controles de la pantalla bloqueada ---------- */
-function mediaMeta(){
-  if(!('mediaSession' in navigator) || !doc) return;
-  try{
-    navigator.mediaSession.metadata = new MediaMetadata({title: doc.name, artist: 'Lectora' + (doc.voice ? ' · ' + doc.voice : ''),
-      artwork:[{src:'icons/icon-512.png', sizes:'512x512', type:'image/png'}]});
-  }catch(e){}
-}
-if('mediaSession' in navigator){
-  const h = (a,f)=>{ try{ navigator.mediaSession.setActionHandler(a,f); }catch(e){} };
-  h('play', ()=>play()); h('pause', ()=>stop());
-  h('previoustrack', ()=>jump(idx-1)); h('nexttrack', ()=>jump(idx+1));
-  h('seekbackward', ()=>{ if(isAudio() && audioUrl) audio.currentTime = Math.max(0, audio.currentTime-15); else jump(idx-2); });
-  h('seekforward', ()=>{ if(isAudio() && audioUrl) audio.currentTime = Math.min(audio.duration||1e9, audio.currentTime+15); else jump(idx+2); });
-}
-document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'){ if(playing && !isAudio()) holdScreen(true); if(doc){ showSentence(true); } }
-});
-
-/* ---------- Pantalla negra ---------- */
-let lastTap = 0;
-$('#blackBtn').onclick = ()=>{ $('#blackout').hidden = false; updateMeta(); };
-$('#blackout').addEventListener('click', ()=>{
-  const now = Date.now();
-  if(now - lastTap < 400){ $('#blackout').hidden = true; showSentence(true); }
-  lastTap = now;
-});
-
-/* ---------- Voces ---------- */
-const isGood = v => /premium|enhanced|mejorad|natural|neural|online|wavenet|studio|siri/i.test(v.name + ' ' + v.voiceURI);
-function score(v, lang){
-  let s = 0;
-  if(v.lang.toLowerCase().startsWith(lang)) s += 100;
-  if(isGood(v)) s += 50;
-  if(/google/i.test(v.name)) s += 20;
-  if(lang==='es'){ if(/es[-_]CL/i.test(v.lang)) s += 6; else if(/es[-_](MX|US|419)/i.test(v.lang)) s += 4; }
-  if(lang==='en' && /en[-_]US/i.test(v.lang)) s += 4;
-  if(v.localService) s += 1;
-  return s;
-}
-function pickVoice(lang){
-  const saved = store.get('voice:'+lang, lang==='es' ? store.get('voice', null) : null);
-  const byScore = voices.slice().sort((a,b)=>score(b,lang)-score(a,lang));
-  return voices.find(v=>v.voiceURI===saved) || byScore.find(v=>v.lang.toLowerCase().startsWith(lang)) || null;
-}
-function voiceLabel(){ const v = voiceBy.es; return v ? v.name.replace(/\s*\(.*\)\s*/,'') : 'Voz'; }
-function loadVoices(){
-  if(!synth) return;
-  voices = synth.getVoices();
-  voiceBy.es = pickVoice('es'); voiceBy.en = pickVoice('en');
-  fillVoices();
-}
-function fillVoices(){
-  const all = $('#allLangs').checked;
-  for(const lang of ['es','en']){
-    const sel = $(lang==='es' ? '#voiceEs' : '#voiceEn'); sel.innerHTML = '';
-    const list = voices.filter(v=> all || v.lang.toLowerCase().startsWith(lang) || v===voiceBy[lang])
-      .sort((a,b)=>score(b,lang)-score(a,lang) || a.name.localeCompare(b.name));
-    if(!list.length){ const o = document.createElement('option'); o.textContent = 'Voz del sistema'; sel.appendChild(o); }
-    list.forEach(v=>{
-      const o = document.createElement('option'); o.value = v.voiceURI;
-      o.textContent = (isGood(v)?'★ ':'') + v.name + ' · ' + v.lang;
-      if(v===voiceBy[lang]) o.selected = true;
-      sel.appendChild(o);
-    });
-  }
-  if(!isAudio()) $('#voiceBtn').textContent = voiceLabel();
-  const missing = ['es','en'].filter(l=>!voices.some(v=>v.lang.toLowerCase().startsWith(l) && isGood(v)));
-  $('#voiceNote').textContent = missing.length ? `Aún no tienes voces ★ en ${missing.map(l=>l==='es'?'español':'inglés').join(' ni en ')}. Mira abajo cómo descargarlas.` : '';
-}
-if(synth){ loadVoices(); synth.addEventListener ? synth.addEventListener('voiceschanged', loadVoices) : (synth.onvoiceschanged = loadVoices); }
-for(const lang of ['es','en']){
-  $(lang==='es' ? '#voiceEs' : '#voiceEn').onchange = e=>{
-    const v = voices.find(v=>v.voiceURI===e.target.value);
-    if(v){ voiceBy[lang] = v; store.set('voice:'+lang, v.voiceURI); }
-    fillVoices();
-    if(playing && !isAudio()) speak();
-  };
-}
-
-function setRate(r){
-  rate = Math.round(r*100)/100; store.set('rate', rate);
-  const txt = rate.toFixed(rate*10%1 ? 2 : 1).replace('.',',') + '×';
-  $('#rateBtn').textContent = txt; $('#rateVal').textContent = txt; $('#rate').value = rate;
-  audio.playbackRate = rate;
-  if(doc) updateMeta();
-}
-
-/* ---------- Biblioteca ---------- */
-function renderShelf(){
-  const lib = store.get('lib',[]);
-  const shelf = $('#shelf'); shelf.innerHTML = '';
-  const items = [{key:SAMPLE.key, name:'Ejemplo', page:null}, ...lib];
-  items.forEach(it=>{
-    const c = document.createElement('div'); c.className = 'chip' + (doc && doc.key===it.key ? ' on' : '');
-    const b = document.createElement('button');
-    b.innerHTML = '<span class="n"></span><span class="p"></span>';
-    b.querySelector('.n').textContent = it.name;
-    const p = b.querySelector('.p');
-    p.textContent = it.pages ? `pág. ${it.page||1} de ${it.pages}` : 'Cómo funciona';
-    if(it.audio){ const t = document.createElement('span'); t.className = 'tag'; t.textContent = it.voice || 'Audio'; p.appendChild(t); }
-    b.onclick = ()=> openFromShelf(it.key);
-    c.appendChild(b);
-    if(it.pages){
-      const x = document.createElement('button'); x.className = 'x'; x.textContent = '×';
-      x.setAttribute('aria-label','Quitar ' + it.name);
-      x.onclick = async ()=>{
-        if(doc && doc.key===it.key) setDoc(SAMPLE, store.get('pos:'+SAMPLE.key,0));
-        store.set('lib', store.get('lib',[]).filter(y=>y.key!==it.key)); store.del('pos:'+it.key); store.del('time:'+it.key);
-        await dbDel(it.key); renderShelf();
-      };
-      c.appendChild(x);
-    }
-    shelf.appendChild(c);
-  });
-}
-async function openFromShelf(key){
-  if(doc && doc.key===key) return;
-  if(key===SAMPLE.key){ setDoc(SAMPLE, store.get('pos:'+key,0)); return; }
-  const d = await dbGet(key);
-  if(d) setDoc(d, store.get('pos:'+key,0));
-  else showStatus('No encontré ese documento guardado en este teléfono. Ábrelo de nuevo con Abrir.', 'err');
-}
-function addToLibrary(d){
-  const lib = store.get('lib',[]).filter(x=>x.key!==d.key);
-  lib.unshift({key:d.key, name:d.name, pages:d.pages.length, page:1, audio:d.kind==='audio', voice:d.voice});
-  store.set('lib', lib.slice(0,20));
-}
-
-function showStatus(msg, kind){ const s = $('#status'); s.textContent = msg; s.className = 'status' + (kind ? ' '+kind : ''); s.hidden = false; }
-function hideStatus(){ $('#status').hidden = true; }
-
-/* ---------- Abrir un PDF ---------- */
-async function openPdf(file){
-  if(!pdfjs){ showStatus('No se pudo cargar el lector de PDF. Recarga la página.', 'err'); return; }
-  stop();
-  showStatus('Abriendo ' + file.name + '…');
-  try{
-    const data = new Uint8Array(await file.arrayBuffer());
-    const pdf = await pdfjs.getDocument({data, isEvalSupported:false}).promise;
-    const raw = [];
-    for(let i=1;i<=pdf.numPages;i++){
-      const pg = await pdf.getPage(i);
-      raw.push(pageLines(await pg.getTextContent()));
-      pg.cleanup();
-      if(i%3===0 || i===pdf.numPages) showStatus(`Sacando el texto… página ${i} de ${pdf.numPages}`);
-    }
-    const pages = stripRepeats(raw).map(ls=>splitSentences(joinLines(ls)));
-    const total = pages.reduce((a,p)=>a+p.length,0);
-    if(!total){
-      showStatus('Este PDF no tiene texto, solo imágenes de las páginas (es un escaneo). Para que se pueda leer en voz alta, primero hay que pasarlo por un programa de OCR que reconozca el texto.', 'err');
-      return;
-    }
-    const key = file.name + '|' + file.size;
-    const d = {key, name:file.name.replace(/\.pdf$/i,''), pages};
-    await dbPut(d); addToLibrary(d);
-    setDoc(d, store.get('pos:'+key,0));
-    const empty = pages.filter(p=>!p.length).length;
-    if(empty) showStatus(`Listo. ${empty} de ${pages.length} páginas no tienen texto (imágenes o páginas en blanco) y se saltarán.`);
-    else hideStatus();
-  }catch(e){
-    const pw = e && e.name==='PasswordException';
-    showStatus(pw ? 'Este PDF tiene contraseña. Quítasela y vuelve a abrirlo.' : 'No pude abrir este archivo. ¿Es un PDF? (' + (e && e.message || e) + ')', 'err');
-  }
-}
-
-/* ---------- Abrir un audio del Estudio (zip sin comprimir: lectora.json + audio.m4a) ---------- */
-async function readZipEntries(file){
-  const tailLen = Math.min(file.size, 65557);
-  const tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
-  let e = -1;
-  for(let i = tailLen - 22; i >= 0; i--){ if(tail.getUint32(i,true) === 0x06054b50){ e = i; break; } }
-  if(e < 0) throw new Error('no es un zip');
-  const count = tail.getUint16(e+10,true), cdSize = tail.getUint32(e+12,true), cdOff = tail.getUint32(e+16,true);
-  const cd = new DataView(await file.slice(cdOff, cdOff+cdSize).arrayBuffer());
-  const out = {}; let o = 0;
-  for(let k=0;k<count;k++){
-    const method = cd.getUint16(o+10,true), size = cd.getUint32(o+20,true);
-    const nl = cd.getUint16(o+28,true), xl = cd.getUint16(o+30,true), cl = cd.getUint16(o+32,true), lho = cd.getUint32(o+42,true);
-    const name = new TextDecoder().decode(new Uint8Array(cd.buffer, o+46, nl));
-    const lh = new DataView(await file.slice(lho, lho+30).arrayBuffer());
-    const start = lho + 30 + lh.getUint16(26,true) + lh.getUint16(28,true);
-    out[name] = {method, blob: file.slice(start, start+size)};
-    o += 46 + nl + xl + cl;
-  }
-  return out;
-}
-async function openAudioZip(file){
-  stop();
-  showStatus('Abriendo ' + file.name + '…');
-  try{
-    const z = await readZipEntries(file);
-    const j = z['lectora.json'], a = z['audio.m4a'];
-    if(!j || !a || j.method !== 0 || a.method !== 0) throw new Error('Este .zip no viene del Estudio Lectora (o se volvió a comprimir). Usa el archivo tal como lo dejó el Mac en «listos».');
-    const meta = JSON.parse(await j.blob.text());
-    const key = 'audio|' + file.name + '|' + file.size;
-    showStatus('Guardando el audio en el teléfono…');
-    const blob = new Blob([await a.blob.arrayBuffer()], {type:'audio/mp4'});
-    if(!(await audioPut(key, blob))) throw new Error('No hay espacio para guardar el audio en el teléfono.');
-    const d = {key, kind:'audio', name:meta.name, voice:meta.voice, duration:meta.duration, pages:meta.pages};
-    await dbPut(d); addToLibrary(d);
-    setDoc(d, store.get('pos:'+key,0));
-    showStatus(`Listo: ${fmtTime(meta.duration)} de audio con ${meta.voice.toLowerCase()}. Puedes bloquear el teléfono mientras escuchas.`);
-  }catch(e){
-    showStatus('No pude abrir este archivo. ' + (e && e.message || e), 'err');
-  }
-}
-
-/* ---------- Controles ---------- */
-$('#file').addEventListener('change', e=>{
-  const f = e.target.files[0]; e.target.value = '';
-  if(!f) return;
-  if(/\.zip$/i.test(f.name) || /zip/.test(f.type)) openAudioZip(f); else openPdf(f);
-});
-$('#play').onclick = ()=> playing ? stop() : play();
-$('#prev').onclick = ()=> jump(idx-1);
-$('#next').onclick = ()=> jump(idx+1);
-$('#page').addEventListener('click', e=>{
-  const s = e.target.closest('.s'); if(!s) return;
-  jump(+s.dataset.i);
-});
-function goPage(p){
-  if(!doc) return;
-  p = Math.min(Math.max(0,p), doc.pages.length-1);
-  const next = p+1 < pageStarts.length ? pageStarts[p+1] : flat.length;
-  if(pageStarts[p] < next){ jump(pageStarts[p]); }
-  else renderPage(p);
-  window.scrollTo({top:0});
-}
-$('#prevPage').onclick = ()=> goPage(shownPage-1);
-$('#nextPage').onclick = ()=> goPage(shownPage+1);
-$('#pageInput').addEventListener('change', e=> goPage((+e.target.value||1)-1));
-
-function openSheet(){
-  const a = isAudio();
-  $('#ttsVoices').hidden = a; $('#testRow').hidden = a;
-  $('#audioNote').hidden = !a;
-  if(a) $('#audioNote').textContent = `Este documento es un audio hecho en el Mac con ${doc.voice ? doc.voice.toLowerCase() : 'otra voz'}. Aquí solo cambias la velocidad.`;
-  $('#scrim').hidden = false; fillVoices();
-}
-function closeSheet(){ $('#scrim').hidden = true; }
-$('#voiceBtn').onclick = openSheet;
-$('#rateBtn').onclick = openSheet;
-$('#closeSheet').onclick = closeSheet;
-$('#scrim').addEventListener('click', e=>{ if(e.target.id==='scrim') closeSheet(); });
-$('#allLangs').onchange = fillVoices;
-$('#rate').oninput = e=> setRate(+e.target.value);
-$('#rate').onchange = ()=>{ if(playing && !isAudio()) speak(); };
-$('#test').onclick = ()=>{
-  if(!synth) return;
-  if(playing){ speak(); return; }
-  synth.cancel();
-  [['es','Hola. Así suena la voz en español.'],['en','And this is the English voice.']].forEach(([l,t])=>{
-    const u = new SpeechSynthesisUtterance(t); const v = voiceBy[l];
-    if(v){ u.voice = v; u.lang = v.lang; } else u.lang = l==='en' ? 'en-US' : 'es-ES';
-    u.rate = rate; synth.speak(u);
-  });
-};
-
-/* ---------- Instalar en la pantalla de inicio ---------- */
-const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-let installEvt = null;
-function showInstall(){
-  if(standalone || store.get('installDone', false)) return;
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
-  $('#installText').textContent = installEvt
-    ? 'Instala la Lectora para abrirla desde la pantalla de inicio, como cualquier app.'
-    : ios ? 'Para tenerla como app: toca Compartir (el cuadrado con la flecha) y luego «Agregar a inicio».'
-          : 'Para tenerla como app: abre el menú ⋮ del navegador y toca «Instalar app» o «Agregar a pantalla principal».';
-  $('#installBtn').hidden = !installEvt;
-  $('#install').hidden = false;
-}
-window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); installEvt = e; showInstall(); });
-window.addEventListener('appinstalled', ()=>{ store.set('installDone', true); $('#install').hidden = true; });
-$('#installBtn').onclick = async ()=>{ if(!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('#install').hidden = true; };
-$('#installClose').onclick = ()=>{ store.set('installDone', true); $('#install').hidden = true; };
-showInstall();
-
-/* ---------- Inicio ---------- */
-setRate(rate);
-(async ()=>{
-  const last = store.get('last', SAMPLE.key);
-  let d = null;
-  if(last !== SAMPLE.key) d = await dbGet(last);
-  d = d || SAMPLE;
-  setDoc(d, store.get('pos:'+d.key, 0));
-  if(!synth) showStatus('Este navegador no puede leer en voz alta con las voces del teléfono. Abre la página en Safari (iPhone) o Chrome (Android).', 'err');
-})();
-})();
-</script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
