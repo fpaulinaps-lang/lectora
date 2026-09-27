@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0E6B63">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Lectora">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>Lectora</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap">
+<style>
+:root{
+  --bg:#EEF1EF; --paper:#FAFBFA; --ink:#1B2321; --muted:#5D6A66; --line:#D5DCD9;
+  --accent:#0E6B63; --accent-ink:#FFFFFF; --accent-soft:#D7E9E5;
+  --mark:rgba(240,190,60,.40); --err:#A33A2B;
+  --ui:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --read:"Literata",Georgia,"Times New Roman",serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#101514; --paper:#171D1C; --ink:#E2E8E5; --muted:#93A29D; --line:#2A3331;
+    --accent:#4CC0B2; --accent-ink:#06201D; --accent-soft:#1D3431;
+    --mark:rgba(235,185,60,.24); --err:#E88A7A;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#101514; --paper:#171D1C; --ink:#E2E8E5; --muted:#93A29D; --line:#2A3331;
+  --accent:#4CC0B2; --accent-ink:#06201D; --accent-soft:#1D3431;
+  --mark:rgba(235,185,60,.24); --err:#E88A7A;
+}
+*{box-sizing:border-box}
+body{background:var(--bg); color:var(--ink); font-family:var(--ui); font-size:16px; line-height:1.45}
+button,input,select{font:inherit; color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+.top{position:sticky; top:env(safe-area-inset-top,0px); z-index:5; background:var(--bg);
+  border-bottom:1px solid var(--line)}
+.top-in{max-width:44rem; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:12px}
+.brand{font-family:var(--read); font-weight:600; font-size:1.15rem; letter-spacing:.01em}
+.doc-name{flex:1; min-width:0; color:var(--muted); font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.btn{display:inline-flex; align-items:center; gap:6px; border:0; border-radius:999px; padding:9px 16px;
+  background:var(--accent); color:var(--accent-ink); font-weight:700; font-size:.95rem; white-space:nowrap}
+.btn.ghost{background:transparent; color:var(--ink); border:1px solid var(--line)}
+.sr{position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0 0 0 0)}
+
+main{max-width:44rem; margin:0 auto; padding-inline:16px; padding-block:14px 190px; display:flex; flex-direction:column; gap:14px}
+
+.shelf{display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; scrollbar-width:none}
+.shelf::-webkit-scrollbar{display:none}
+.chip{flex:none; display:flex; align-items:center; border:1px solid var(--line); border-radius:12px; background:var(--paper); max-width:15rem}
+.chip.on{border-color:var(--accent); background:var(--accent-soft)}
+.chip button{background:none; border:0; text-align:left; padding:7px 4px 7px 12px; min-width:0}
+.chip .n{display:block; font-weight:700; font-size:.88rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.chip .p{display:block; color:var(--muted); font-size:.78rem; font-variant-numeric:tabular-nums}
+.chip .x{padding:7px 10px; color:var(--muted); font-size:1.1rem; line-height:1}
+
+.status{border-radius:12px; padding:12px 14px; background:var(--accent-soft); font-size:.95rem}
+.install{display:flex; flex-wrap:wrap; align-items:center; gap:10px}
+.install span{flex:1 1 16rem}
+.status.err{background:transparent; border:1px solid var(--err); color:var(--err)}
+
+.page{background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:22px 20px 26px}
+.folio{font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-bottom:14px; display:flex; justify-content:space-between}
+.text{font-family:var(--read); font-size:1.18rem; line-height:1.72; margin:0; hyphens:auto; -webkit-hyphens:auto}
+.text p{margin:0 0 .9em}
+.s{cursor:pointer; border-radius:3px; transition:background-color .2s}
+.s:hover{background:var(--accent-soft)}
+.s.on{background:var(--mark); box-shadow:0 0 0 2px var(--mark)}
+.empty{color:var(--muted); font-style:italic}
+
+.pager{display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--muted); font-size:.92rem}
+.pager .go{display:flex; align-items:center; gap:6px; font-variant-numeric:tabular-nums}
+.pager input{width:4.2em; padding:5px 6px; border:1px solid var(--line); border-radius:8px; background:var(--paper); text-align:center}
+
+.player{position:fixed; left:0; right:0; bottom:0; z-index:6; background:var(--paper); border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+.bar{height:4px; background:var(--line)}
+.bar i{display:block; height:100%; width:0; background:var(--accent); transition:width .3s}
+.player-in{max-width:44rem; margin:0 auto; padding:10px 16px 12px; display:flex; flex-direction:column; gap:8px}
+.meta{display:flex; justify-content:space-between; gap:10px; font-size:.8rem; color:var(--muted); font-variant-numeric:tabular-nums}
+.controls{display:grid; grid-template-columns:1fr auto auto auto 1fr; align-items:center; gap:14px}
+.ic{width:48px; height:48px; border-radius:50%; border:1px solid var(--line); background:transparent; display:grid; place-items:center}
+.ic svg{width:22px; height:22px; fill:currentColor}
+.play{width:64px; height:64px; border:0; background:var(--accent); color:var(--accent-ink)}
+.play svg{width:28px; height:28px}
+.side{justify-self:start; border:1px solid var(--line); background:transparent; border-radius:999px; padding:8px 12px; font-size:.85rem; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.side.r{justify-self:end; font-variant-numeric:tabular-nums}
+
+.scrim{position:fixed; inset:0; z-index:9; background:rgba(0,0,0,.35); display:flex; align-items:flex-end; justify-content:center}
+.sheet{width:100%; max-width:44rem; max-height:88%; overflow-y:auto; background:var(--paper); border-radius:18px 18px 0 0;
+  padding:18px 16px calc(20px + env(safe-area-inset-bottom,0px)); display:flex; flex-direction:column; gap:16px}
+.sheet h2{font-family:var(--read); font-size:1.25rem; margin:0; display:flex; justify-content:space-between; align-items:center}
+.field{display:flex; flex-direction:column; gap:6px}
+.field label,.lbl{font-size:.75rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:700}
+.field select{padding:11px 10px; border-radius:10px; border:1px solid var(--line); background:var(--bg); width:100%}
+.row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
+.check{display:flex; align-items:center; gap:8px; font-size:.92rem}
+.check input{accent-color:var(--accent); width:18px; height:18px}
+.tips{border-top:1px solid var(--line); padding-top:14px; font-size:.92rem; display:flex; flex-direction:column; gap:10px}
+.tips p{margin:0}
+.tips b{font-weight:700}
+.path{font-family:var(--ui); background:var(--bg); border-radius:6px; padding:1px 6px}
+.hint{color:var(--muted); font-size:.85rem; margin:0}
+@media (prefers-reduced-motion: reduce){ .bar i,.s{transition:none} }
+html,body{margin:0}
+img{max-width:100%}
+[hidden]{display:none!important}
+.top{top:0; padding-top:env(safe-area-inset-top,0px)}
+</style>
+</head>
+<body>
+
+<header class="top"><div class="top-in">
+  <div class="brand">Lectora</div>
+  <div class="doc-name" id="docName">Ejemplo</div>
+  <label class="btn" for="file">Abrir PDF</label>
+  <input class="sr" type="file" id="file" accept="application/pdf,.pdf">
+</div></header>
+
+<main>
+  <div class="shelf" id="shelf"></div>
+  <div class="status install" id="install" hidden>
+    <span id="installText"></span>
+    <button class="btn ghost" id="installBtn" hidden>Instalar</button>
+    <button class="btn ghost" id="installClose">Entendido</button>
+  </div>
+  <div class="status" id="status" hidden></div>
+  <article class="page" id="page"></article>
+  <nav class="pager">
+    <button class="btn ghost" id="prevPage">‹ Anterior</button>
+    <div class="go">Página <input type="number" id="pageInput" min="1" inputmode="numeric"> de <span id="pageCount">1</span></div>
+    <button class="btn ghost" id="nextPage">Siguiente ›</button>
+  </nav>
+</main>
+
+<div class="player">
+  <div class="bar"><i id="bar"></i></div>
+  <div class="player-in">
+    <div class="meta"><span id="where">Página 1 de 2</span><span id="left"></span></div>
+    <div class="controls">
+      <button class="side" id="voiceBtn">Voz</button>
+      <button class="ic" id="prev" aria-label="Frase anterior"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+      <button class="ic play" id="play" aria-label="Leer"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 4v16l13-8z"/></svg></button>
+      <button class="ic" id="next" aria-label="Frase siguiente"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+      <button class="side r" id="rateBtn">1,0×</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="sheet" role="dialog" aria-label="Voz y velocidad">
+    <h2>Voz y velocidad <button class="btn ghost" id="closeSheet">Listo</button></h2>
+    <div class="field">
+      <label for="voiceSel">Voz</label>
+      <select id="voiceSel"></select>
+      <label class="check"><input type="checkbox" id="allLangs"> Mostrar voces de otros idiomas</label>
+    </div>
+    <div class="field">
+      <span class="lbl">Velocidad</span>
+      <div class="row"><input type="range" id="rate" min="0.6" max="2.2" step="0.05" value="1"><b id="rateVal" style="font-variant-numeric:tabular-nums;min-width:3.5em;text-align:right">1,0×</b></div>
+    </div>
+    <div class="row"><button class="btn" id="test">Probar voz</button><p class="hint" id="voiceNote"></p></div>
+    <div class="tips">
+      <span class="lbl">Voces más naturales, gratis</span>
+      <p>Las voces las pone tu teléfono, sin límite de uso. Las de mejor calidad hay que descargarlas una vez:</p>
+      <p><b>iPhone:</b> <span class="path">Ajustes › Accesibilidad › Contenido leído › Voces › Español</span>. Descarga una voz que diga <b>Mejorada</b> o <b>Premium</b> (por ejemplo Mónica, Paulina o Jorge).</p>
+      <p><b>Android:</b> <span class="path">Ajustes › Sistema › Idiomas › Salida de texto a voz</span>. Elige <b>Servicios de voz de Google</b> e instala el español en alta calidad.</p>
+      <p><b>Computador:</b> Microsoft Edge trae voces marcadas <b>Natural</b> que suenan muy bien.</p>
+      <p>Después de descargar, recarga esta página y elige la voz nueva. Las voces recomendadas aparecen con ★.</p>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/pdf.min.js"></script>
+<script>
+(function(){
+const $ = s => document.querySelector(s);
+const synth = window.speechSynthesis;
+const pdfjs = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+if(pdfjs) pdfjs.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+const SAMPLE = {key:'ejemplo', name:'Ejemplo: cómo usar la Lectora', sample:true, pages:[
+  ['CÓMO USAR LA LECTORA',
+   'Esta es una página de ejemplo para que escuches cómo funciona antes de abrir tus propios archivos.',
+   'Toca Abrir PDF, elige un documento de tu teléfono y el texto aparecerá aquí, separado por páginas.',
+   'Luego toca el botón grande de reproducir.',
+   'La frase que se está leyendo queda marcada, y las páginas avanzan solas.',
+   'Si quieres saltar a otra parte, toca cualquier frase y la lectura seguirá desde ahí.',
+   'La voz la pone tu propio teléfono, así que no hay límite de páginas, de palabras ni de tiempo, y el documento no se envía a ningún servidor.'],
+  ['VOCES MÁS NATURALES',
+   'Para que suene más natural, descarga una voz de alta calidad en los ajustes del teléfono.',
+   'En iPhone ve a Ajustes, Accesibilidad, Contenido leído, Voces, Español, y descarga una voz marcada como mejorada o premium.',
+   'En Android abre los ajustes de texto a voz, elige los servicios de voz de Google e instala el español.',
+   'Después vuelve a esta página, toca el botón Voz y elige la nueva voz de la lista.',
+   'La Lectora recuerda en qué frase quedaste en cada documento, aunque cierres la página.']
+]};
+
+const store = {
+  get(k,d){ try{ const v = localStorage.getItem('lectora:'+k); return v==null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k,v){ try{ localStorage.setItem('lectora:'+k, JSON.stringify(v)); }catch(e){} },
+  del(k){ try{ localStorage.removeItem('lectora:'+k); }catch(e){} }
+};
+
+/* ---------- IndexedDB: guarda el texto de cada documento ---------- */
+let dbp = null;
+function idb(){
+  if(!dbp) dbp = new Promise((res,rej)=>{
+    try{
+      const r = indexedDB.open('lectora',1);
+      r.onupgradeneeded = ()=> r.result.createObjectStore('docs',{keyPath:'key'});
+      r.onsuccess = ()=> res(r.result); r.onerror = ()=> rej(r.error);
+    }catch(e){ rej(e); }
+  });
+  return dbp;
+}
+async function dbDo(mode, fn){
+  try{
+    const db = await idb();
+    return await new Promise((res,rej)=>{
+      const tx = db.transaction('docs',mode); const r = fn(tx.objectStore('docs'));
+      tx.oncomplete = ()=> res(r && r.result); tx.onerror = ()=> rej(tx.error);
+    });
+  }catch(e){ return null; }
+}
+const dbPut = d => dbDo('readwrite', s=>s.put(d));
+const dbGet = k => dbDo('readonly', s=>s.get(k));
+const dbDel = k => dbDo('readwrite', s=>s.delete(k));
+
+/* ---------- Extracción y limpieza del texto ---------- */
+function pageLines(content){
+  const lines = []; let cur = ''; let lastY = null;
+  for(const it of content.items){
+    if(typeof it.str !== 'string') continue;
+    const y = it.transform ? Math.round(it.transform[5]) : null;
+    if(lastY !== null && y !== null && Math.abs(y-lastY) > 2 && cur.trim()){ lines.push(cur); cur=''; }
+    cur += it.str;
+    if(it.hasEOL){ lines.push(cur); cur=''; }
+    if(y !== null) lastY = y;
+  }
+  if(cur.trim()) lines.push(cur);
+  return lines.map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean);
+}
+const isPageNum = l => /^[-–—\s]*(p[aá]g(ina)?\.?\s*)?\d+(\s*(de|\/)\s*\d+)?[-–—\s]*$/i.test(l);
+const norm = l => l.toLowerCase().replace(/\d+/g,'#').replace(/\s+/g,' ').trim();
+function stripRepeats(pages){
+  // quita encabezados y pies que se repiten en muchas páginas
+  const count = new Map();
+  pages.forEach(ls=>{
+    new Set([...ls.slice(0,2), ...ls.slice(-2)].map(norm)).forEach(k=>count.set(k,(count.get(k)||0)+1));
+  });
+  const thr = Math.max(3, pages.length*0.3);
+  return pages.map(ls=>ls.filter((l,i)=>{
+    if(isPageNum(l)) return false;
+    const edge = i<2 || i>=ls.length-2;
+    return !(pages.length>=4 && edge && l.length<120 && count.get(norm(l))>=thr);
+  }));
+}
+const isHeading = l => l.length<90 && !/[.,;:]$/.test(l) && l===l.toUpperCase() && /[A-ZÁÉÍÓÚÑ]{3}/.test(l);
+function joinLines(lines){
+  let out = '', prev = '';
+  for(const l of lines){
+    if(!out){ out = l; }
+    else if(isHeading(prev) || isHeading(l)){ out += '\n' + l; }
+    else if(/[A-Za-zÁÉÍÓÚáéíóúñÑ]-$/.test(out) && /^[a-záéíóúñü]/.test(l)){ out = out.slice(0,-1) + l; }
+    else out += ' ' + l;
+    prev = l;
+  }
+  return out;
+}
+const ABBR = /(?:\b(?:arts?|inc|núm|nº|n°|nro|sr|sra|srta|dr|dra|lic|etc|págs?|pp?|caps?|vol|ej|cfr|vid|op|cit|ss|sgtes?|ed|av|dto|dfl|ord|aprox|fig|tel|cía|ltda|ee\.uu)|\b[A-Za-zÁÉÍÓÚÑ]|\d+)\.$/i;
+function chop(t, max=220){
+  const r = [];
+  while(t.length > max){
+    let cut = Math.max(t.lastIndexOf(', ',max), t.lastIndexOf('; ',max), t.lastIndexOf(': ',max));
+    if(cut < max*0.4) cut = t.lastIndexOf(' ',max);
+    if(cut <= 0) cut = max;
+    r.push(t.slice(0,cut+1).trim()); t = t.slice(cut+1).trim();
+  }
+  if(t) r.push(t);
+  return r;
+}
+function splitSentences(text){
+  const out = [];
+  for(const block of text.split(/\n+/)){
+    const parts = block.match(/[^.!?…]+(?:[.!?…]+["'»”’)\]]*|$)/g) || [];
+    let buf = '';
+    for(const p of parts){
+      buf += p;
+      const t = buf.trim();
+      if(t.length < 18 || ABBR.test(t)) continue;
+      out.push(...chop(t)); buf = '';
+    }
+    if(buf.trim()) out.push(...chop(buf.trim()));
+  }
+  return out.filter(s=>/[\p{L}\p{N}]/u.test(s));
+}
+
+/* ---------- Estado ---------- */
+let doc = null, flat = [], pageStarts = [], shownPage = 0;
+let idx = 0, playing = false, token = 0, lastStart = 0, stalledSince = 0;
+let voices = [], voice = null, rate = store.get('rate',1), wake = null, current = null;
+
+function setDoc(d, pos){
+  doc = d; flat = []; pageStarts = [];
+  d.pages.forEach((sents,p)=>{ pageStarts.push(flat.length); sents.forEach(t=>flat.push({p,t})); });
+  idx = Math.min(Math.max(0, pos|0), Math.max(0, flat.length-1));
+  $('#docName').textContent = d.name;
+  $('#pageCount').textContent = d.pages.length;
+  $('#pageInput').max = d.pages.length;
+  store.set('last', d.key);
+  renderPage(flat.length ? flat[idx].p : 0);
+  renderShelf(); updateMeta();
+}
+
+function renderPage(p){
+  shownPage = p;
+  const el = $('#page'); el.innerHTML = '';
+  const folio = document.createElement('div'); folio.className = 'folio';
+  folio.innerHTML = `<span>Página ${p+1}</span><span>${doc.sample ? 'Ejemplo' : ''}</span>`;
+  el.appendChild(folio);
+  const text = document.createElement('div'); text.className = 'text';
+  const sents = doc.pages[p] || [];
+  if(!sents.length){
+    const e = document.createElement('p'); e.className = 'empty';
+    e.textContent = 'Esta página no tiene texto que leer (puede ser una imagen o estar en blanco).';
+    text.appendChild(e);
+  }
+  let para = document.createElement('p');
+  sents.forEach((t,j)=>{
+    if(isHeading(t) && para.childNodes.length){ text.appendChild(para); para = document.createElement('p'); }
+    const s = document.createElement('span'); s.className = 's'; s.dataset.i = pageStarts[p]+j; s.textContent = t + ' ';
+    para.appendChild(s);
+    if(isHeading(t)){ para.style.fontWeight = '600'; text.appendChild(para); para = document.createElement('p'); }
+  });
+  if(para.childNodes.length) text.appendChild(para);
+  el.appendChild(text);
+  $('#pageInput').value = p+1;
+  mark(false);
+}
+
+function mark(scroll){
+  document.querySelectorAll('.s.on').forEach(e=>e.classList.remove('on'));
+  const s = document.querySelector(`.s[data-i="${idx}"]`);
+  if(s){
+    s.classList.add('on');
+    if(scroll){
+      const r = s.getBoundingClientRect();
+      const bottomLimit = window.innerHeight - 190;
+      if(r.top < 70 || r.bottom > bottomLimit) s.scrollIntoView({block:'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    }
+  }
+}
+
+function fmtTime(sec){
+  if(sec < 60) return 'menos de 1 min';
+  const m = Math.round(sec/60);
+  if(m < 60) return m + ' min';
+  return Math.floor(m/60) + ' h ' + (m%60) + ' min';
+}
+function updateMeta(){
+  const total = flat.length;
+  const p = total ? flat[idx].p : 0;
+  const pct = total ? Math.round(idx/Math.max(1,total-1)*100) : 0;
+  $('#where').textContent = `Página ${p+1} de ${doc.pages.length} · ${pct}%`;
+  let chars = 0; for(let i=idx;i<total;i++) chars += flat[i].t.length;
+  $('#left').textContent = total ? 'quedan ~' + fmtTime(chars/(15*rate)) : '';
+  $('#bar').style.width = pct + '%';
+}
+function save(){
+  if(!doc) return;
+  store.set('pos:'+doc.key, idx);
+  const lib = store.get('lib',[]); const it = lib.find(x=>x.key===doc.key);
+  if(it){ it.page = flat.length ? flat[idx].p+1 : 1; store.set('lib',lib); }
+}
+
+/* ---------- Lectura en voz alta ---------- */
+function setPlayIcon(){
+  $('#playIcon').innerHTML = playing ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>' : '<path d="M7 4v16l13-8z"/>';
+  $('#play').setAttribute('aria-label', playing ? 'Pausar' : 'Leer');
+}
+async function holdScreen(on){
+  try{
+    if(on && 'wakeLock' in navigator && !wake){ wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release',()=>wake=null); }
+    if(!on && wake){ await wake.release(); wake = null; }
+  }catch(e){ wake = null; }
+}
+function speak(){
+  const my = ++token;
+  const s = flat[idx];
+  if(!s){ stop(); return; }
+  if(s.p !== shownPage) renderPage(s.p);
+  mark(true); updateMeta(); save();
+  const u = new SpeechSynthesisUtterance(s.t);
+  if(voice){ u.voice = voice; u.lang = voice.lang; } else u.lang = 'es-ES';
+  u.rate = rate;
+  u.onstart = ()=>{ if(my===token) lastStart = Date.now(); };
+  u.onend = ()=>{
+    if(my!==token || !playing) return;
+    if(idx < flat.length-1){ idx++; speak(); }
+    else { stop(); idx = flat.length-1; showStatus('Terminaste de leer este documento.'); }
+  };
+  u.onerror = e=>{
+    if(my!==token || !playing) return;
+    if(e.error==='interrupted' || e.error==='canceled') return;
+    if(e.error==='not-allowed'){ stop(); showStatus('El teléfono bloqueó el audio. Toca el botón de reproducir otra vez.'); return; }
+    if(idx < flat.length-1){ idx++; speak(); } else stop();
+  };
+  current = u; lastStart = Date.now(); stalledSince = 0;
+  if(synth.speaking || synth.pending){
+    synth.cancel();
+    setTimeout(()=>{ if(my===token && playing) synth.speak(u); }, 90);
+  } else synth.speak(u);
+}
+function play(){
+  if(!synth){ showStatus('Este navegador no puede leer en voz alta. Abre la página en Safari o Chrome.', 'err'); return; }
+  if(!flat.length) return;
+  hideStatus();
+  playing = true; setPlayIcon(); holdScreen(true); speak();
+}
+function stop(){
+  playing = false; token++; if(synth) synth.cancel(); setPlayIcon(); holdScreen(false);
+}
+function jump(i){
+  idx = Math.min(Math.max(0,i), flat.length-1);
+  if(playing) speak();
+  else { if(flat[idx] && flat[idx].p!==shownPage) renderPage(flat[idx].p); mark(true); updateMeta(); save(); }
+}
+// Algunos teléfonos cortan la voz sin avisar (pantalla bloqueada, llamadas). Si pasa, retoma la frase.
+setInterval(()=>{
+  if(!playing || !synth) return;
+  if(synth.speaking || synth.pending){ stalledSince = 0; return; }
+  if(Date.now()-lastStart < 1500) return;
+  if(!stalledSince){ stalledSince = Date.now(); return; }
+  if(Date.now()-stalledSince > 2500 && document.visibilityState==='visible') speak();
+}, 1000);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && playing) holdScreen(true); });
+
+/* ---------- Voces ---------- */
+const isGood = v => /premium|enhanced|mejorad|natural|neural|online|wavenet|studio|siri/i.test(v.name + ' ' + v.voiceURI);
+function score(v){
+  let s = 0;
+  if(/^es/i.test(v.lang)) s += 100;
+  if(isGood(v)) s += 50;
+  if(/google/i.test(v.name)) s += 20;
+  if(/es[-_]CL/i.test(v.lang)) s += 6; else if(/es[-_](MX|US|419)/i.test(v.lang)) s += 4;
+  if(v.localService) s += 1;
+  return s;
+}
+function loadVoices(){
+  if(!synth) return;
+  voices = synth.getVoices().slice().sort((a,b)=>score(b)-score(a) || a.name.localeCompare(b.name));
+  const saved = store.get('voice', null);
+  voice = voices.find(v=>v.voiceURI===saved) || voices.find(v=>/^es/i.test(v.lang)) || voices[0] || null;
+  fillVoices();
+}
+function fillVoices(){
+  const all = $('#allLangs').checked;
+  const sel = $('#voiceSel'); sel.innerHTML = '';
+  const list = voices.filter(v=> all || /^es/i.test(v.lang) || v===voice);
+  if(!list.length){
+    const o = document.createElement('option'); o.textContent = 'Voz del sistema'; sel.appendChild(o);
+  }
+  list.forEach(v=>{
+    const o = document.createElement('option'); o.value = v.voiceURI;
+    o.textContent = (isGood(v)?'★ ':'') + v.name + ' · ' + v.lang;
+    if(v===voice) o.selected = true;
+    sel.appendChild(o);
+  });
+  $('#voiceBtn').textContent = voice ? voice.name.replace(/\s*\(.*\)\s*/,'') : 'Voz';
+  $('#voiceNote').textContent = voices.some(v=>/^es/i.test(v.lang) && isGood(v)) ? '' : 'Aún no tienes una voz ★ en español. Mira abajo cómo descargarla.';
+}
+if(synth){ loadVoices(); synth.addEventListener ? synth.addEventListener('voiceschanged', loadVoices) : (synth.onvoiceschanged = loadVoices); }
+
+function setRate(r){
+  rate = Math.round(r*100)/100; store.set('rate', rate);
+  const txt = rate.toFixed(rate*10%1 ? 2 : 1).replace('.',',') + '×';
+  $('#rateBtn').textContent = txt; $('#rateVal').textContent = txt; $('#rate').value = rate;
+  if(doc) updateMeta();
+}
+
+/* ---------- Biblioteca ---------- */
+function renderShelf(){
+  const lib = store.get('lib',[]);
+  const shelf = $('#shelf'); shelf.innerHTML = '';
+  const items = [{key:SAMPLE.key, name:'Ejemplo', page:null}, ...lib];
+  items.forEach(it=>{
+    const c = document.createElement('div'); c.className = 'chip' + (doc && doc.key===it.key ? ' on' : '');
+    const b = document.createElement('button');
+    b.innerHTML = '<span class="n"></span><span class="p"></span>';
+    b.querySelector('.n').textContent = it.name;
+    b.querySelector('.p').textContent = it.pages ? `pág. ${it.page||1} de ${it.pages}` : 'Cómo funciona';
+    b.onclick = ()=> openFromShelf(it.key);
+    c.appendChild(b);
+    if(it.pages){
+      const x = document.createElement('button'); x.className = 'x'; x.textContent = '×';
+      x.setAttribute('aria-label','Quitar ' + it.name);
+      x.onclick = async ()=>{
+        if(doc && doc.key===it.key){ stop(); setDoc(SAMPLE, store.get('pos:'+SAMPLE.key,0)); }
+        store.set('lib', store.get('lib',[]).filter(y=>y.key!==it.key)); store.del('pos:'+it.key);
+        await dbDel(it.key); renderShelf();
+      };
+      c.appendChild(x);
+    }
+    shelf.appendChild(c);
+  });
+}
+async function openFromShelf(key){
+  if(doc && doc.key===key) return;
+  stop();
+  if(key===SAMPLE.key){ setDoc(SAMPLE, store.get('pos:'+key,0)); return; }
+  const d = await dbGet(key);
+  if(d) setDoc(d, store.get('pos:'+key,0));
+  else showStatus('No encontré el texto guardado de ese documento en este teléfono. Ábrelo de nuevo con Abrir PDF.', 'err');
+}
+
+/* ---------- Abrir PDF ---------- */
+function showStatus(msg, kind){ const s = $('#status'); s.textContent = msg; s.className = 'status' + (kind ? ' '+kind : ''); s.hidden = false; }
+function hideStatus(){ $('#status').hidden = true; }
+
+async function openPdf(file){
+  if(!pdfjs){ showStatus('No se pudo cargar el lector de PDF. Revisa tu conexión y recarga la página.', 'err'); return; }
+  stop();
+  showStatus('Abriendo ' + file.name + '…');
+  try{
+    const data = new Uint8Array(await file.arrayBuffer());
+    const pdf = await pdfjs.getDocument({data, isEvalSupported:false}).promise;
+    const raw = [];
+    for(let i=1;i<=pdf.numPages;i++){
+      const pg = await pdf.getPage(i);
+      raw.push(pageLines(await pg.getTextContent()));
+      pg.cleanup();
+      if(i%3===0 || i===pdf.numPages) showStatus(`Sacando el texto… página ${i} de ${pdf.numPages}`);
+    }
+    const pages = stripRepeats(raw).map(ls=>splitSentences(joinLines(ls)));
+    const total = pages.reduce((a,p)=>a+p.length,0);
+    if(!total){
+      showStatus('Este PDF no tiene texto, solo imágenes de las páginas (es un escaneo). Para que se pueda leer en voz alta, primero hay que pasarlo por un programa de OCR que reconozca el texto.', 'err');
+      return;
+    }
+    const key = file.name + '|' + file.size;
+    const d = {key, name:file.name.replace(/\.pdf$/i,''), pages};
+    await dbPut(d);
+    const lib = store.get('lib',[]).filter(x=>x.key!==key);
+    lib.unshift({key, name:d.name, pages:pages.length, page:1});
+    store.set('lib', lib.slice(0,12));
+    setDoc(d, store.get('pos:'+key,0));
+    const empty = pages.filter(p=>!p.length).length;
+    if(empty) showStatus(`Listo. ${empty} de ${pages.length} páginas no tienen texto (imágenes o páginas en blanco) y se saltarán.`);
+    else hideStatus();
+  }catch(e){
+    const pw = e && e.name==='PasswordException';
+    showStatus(pw ? 'Este PDF tiene contraseña. Quítasela y vuelve a abrirlo.' : 'No pude abrir este archivo. ¿Es un PDF? (' + (e && e.message || e) + ')', 'err');
+  }
+}
+
+/* ---------- Controles ---------- */
+$('#file').addEventListener('change', e=>{ const f = e.target.files[0]; if(f) openPdf(f); e.target.value=''; });
+$('#play').onclick = ()=> playing ? stop() : play();
+$('#prev').onclick = ()=> jump(idx-1);
+$('#next').onclick = ()=> jump(idx+1);
+$('#page').addEventListener('click', e=>{
+  const s = e.target.closest('.s'); if(!s) return;
+  const i = +s.dataset.i;
+  idx = i;
+  if(playing) speak(); else { mark(false); updateMeta(); save(); }
+});
+function goPage(p){
+  if(!doc) return;
+  p = Math.min(Math.max(0,p), doc.pages.length-1);
+  let i = pageStarts[p];
+  if(i >= flat.length) i = flat.length-1;
+  if(playing && flat[i] && flat[i].p===p){ idx = i; speak(); }
+  else { renderPage(p); if(doc.pages[p].length){ idx = i; mark(false); updateMeta(); save(); } window.scrollTo({top:0}); }
+}
+$('#prevPage').onclick = ()=> goPage(shownPage-1);
+$('#nextPage').onclick = ()=> goPage(shownPage+1);
+$('#pageInput').addEventListener('change', e=> goPage((+e.target.value||1)-1));
+
+function openSheet(){ $('#scrim').hidden = false; fillVoices(); }
+function closeSheet(){ $('#scrim').hidden = true; }
+$('#voiceBtn').onclick = openSheet;
+$('#rateBtn').onclick = openSheet;
+$('#closeSheet').onclick = closeSheet;
+$('#scrim').addEventListener('click', e=>{ if(e.target.id==='scrim') closeSheet(); });
+$('#allLangs').onchange = fillVoices;
+$('#voiceSel').onchange = e=>{
+  voice = voices.find(v=>v.voiceURI===e.target.value) || voice;
+  if(voice) store.set('voice', voice.voiceURI);
+  fillVoices();
+  if(playing) speak();
+};
+$('#rate').oninput = e=> setRate(+e.target.value);
+$('#rate').onchange = ()=>{ if(playing) speak(); };
+$('#test').onclick = ()=>{
+  if(!synth) return;
+  if(playing){ speak(); return; }
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance('Hola. Así suena esta voz leyendo tus documentos.');
+  if(voice){ u.voice = voice; u.lang = voice.lang; } else u.lang = 'es-ES';
+  u.rate = rate; current = u; synth.speak(u);
+};
+
+/* ---------- Instalar en la pantalla de inicio ---------- */
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let installEvt = null;
+function showInstall(){
+  if(standalone || store.get('installDone', false)) return;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  $('#installText').textContent = installEvt
+    ? 'Instala la Lectora para abrirla desde la pantalla de inicio, como cualquier app.'
+    : ios ? 'Para tenerla como app: toca Compartir (el cuadrado con la flecha) y luego «Agregar a inicio».'
+          : 'Para tenerla como app: abre el menú ⋮ del navegador y toca «Instalar app» o «Agregar a pantalla principal».';
+  $('#installBtn').hidden = !installEvt;
+  $('#install').hidden = false;
+}
+window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); installEvt = e; showInstall(); });
+window.addEventListener('appinstalled', ()=>{ store.set('installDone', true); $('#install').hidden = true; });
+$('#installBtn').onclick = async ()=>{ if(!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('#install').hidden = true; };
+$('#installClose').onclick = ()=>{ store.set('installDone', true); $('#install').hidden = true; };
+showInstall();
+
+/* ---------- Inicio ---------- */
+setRate(rate);
+(async ()=>{
+  const last = store.get('last', SAMPLE.key);
+  let d = null;
+  if(last !== SAMPLE.key) d = await dbGet(last);
+  d = d || SAMPLE;
+  setDoc(d, store.get('pos:'+d.key, 0));
+  if(!synth) showStatus('Este navegador no puede leer en voz alta. Abre la página en Safari (iPhone) o Chrome (Android).', 'err');
+})();
+})();
+</script>
+</body>
+</html>
