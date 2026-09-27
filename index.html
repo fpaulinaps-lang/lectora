@@ -118,14 +118,25 @@ img{max-width:100%}
 [hidden]{display:none!important}
 .top{top:0; padding-top:env(safe-area-inset-top,0px)}
 </style>
+<style>
+.meta{flex-wrap:wrap; align-items:center}
+.pager .btn{font-size:1.3rem; padding:4px 18px; line-height:1.2}
+.pager{justify-content:center; gap:18px}
+.link{background:none; border:0; padding:0; color:var(--accent); font-size:.8rem; font-weight:700; text-decoration:underline; text-underline-offset:2px}
+.tag{display:inline-block; font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; font-weight:700; color:var(--accent); border:1px solid currentColor; border-radius:4px; padding:0 4px; margin-left:4px; vertical-align:1px}
+.blackout{position:fixed; inset:0; z-index:20; background:#000; color:#3a3a3a; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:6px;
+  padding-bottom:calc(48px + env(safe-area-inset-bottom,0px)); font-size:.85rem; text-align:center; user-select:none; -webkit-user-select:none}
+.blackout b{color:#4a4a4a; font-weight:400}
+.note{background:var(--accent-soft); border-radius:10px; padding:10px 12px; font-size:.92rem; margin:0}
+</style>
 </head>
 <body>
 
 <header class="top"><div class="top-in">
   <div class="brand">Lectora</div>
   <div class="doc-name" id="docName">Ejemplo</div>
-  <label class="btn" for="file">Abrir PDF</label>
-  <input class="sr" type="file" id="file" accept="application/pdf,.pdf">
+  <label class="btn" for="file">Abrir</label>
+  <input class="sr" type="file" id="file" accept="application/pdf,.pdf,application/zip,.zip">
 </div></header>
 
 <main>
@@ -138,16 +149,16 @@ img{max-width:100%}
   <div class="status" id="status" hidden></div>
   <article class="page" id="page"></article>
   <nav class="pager">
-    <button class="btn ghost" id="prevPage">‹ Anterior</button>
-    <div class="go">Página <input type="number" id="pageInput" min="1" inputmode="numeric"> de <span id="pageCount">1</span></div>
-    <button class="btn ghost" id="nextPage">Siguiente ›</button>
+    <button class="btn ghost" id="prevPage" aria-label="Página anterior">‹</button>
+    <div class="go"><label for="pageInput">Pág.</label> <input type="number" id="pageInput" min="1" inputmode="numeric"> / <span id="pageCount">1</span></div>
+    <button class="btn ghost" id="nextPage" aria-label="Página siguiente">›</button>
   </nav>
 </main>
 
 <div class="player">
   <div class="bar"><i id="bar"></i></div>
   <div class="player-in">
-    <div class="meta"><span id="where">Página 1 de 2</span><span id="left"></span></div>
+    <div class="meta"><span id="where">Página 1 de 2</span><span id="left"></span><button class="link" id="blackBtn">Pantalla negra</button></div>
     <div class="controls">
       <button class="side" id="voiceBtn">Voz</button>
       <button class="ic" id="prev" aria-label="Frase anterior"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
@@ -158,26 +169,41 @@ img{max-width:100%}
   </div>
 </div>
 
+<div class="blackout" id="blackout" hidden>
+  <b id="blackText">Leyendo…</b>
+  <span>Toca dos veces para volver</span>
+</div>
+
 <div class="scrim" id="scrim" hidden>
   <div class="sheet" role="dialog" aria-label="Voz y velocidad">
     <h2>Voz y velocidad <button class="btn ghost" id="closeSheet">Listo</button></h2>
-    <div class="field">
-      <label for="voiceSel">Voz</label>
-      <select id="voiceSel"></select>
-      <label class="check"><input type="checkbox" id="allLangs"> Mostrar voces de otros idiomas</label>
+    <p class="note" id="audioNote" hidden></p>
+    <div id="ttsVoices">
+      <div class="field">
+        <label for="voiceEs">Voz en español</label>
+        <select id="voiceEs"></select>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <label for="voiceEn">Voz en inglés</label>
+        <select id="voiceEn"></select>
+      </div>
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="allLangs"> Mostrar voces de todos los idiomas</label>
+      <p class="hint" style="margin-top:8px">Cada frase se lee con la voz de su idioma, así que un texto que mezcla español e inglés suena bien.</p>
     </div>
     <div class="field">
       <span class="lbl">Velocidad</span>
       <div class="row"><input type="range" id="rate" min="0.6" max="2.2" step="0.05" value="1"><b id="rateVal" style="font-variant-numeric:tabular-nums;min-width:3.5em;text-align:right">1,0×</b></div>
     </div>
-    <div class="row"><button class="btn" id="test">Probar voz</button><p class="hint" id="voiceNote"></p></div>
+    <div class="row" id="testRow"><button class="btn" id="test">Probar voces</button><p class="hint" id="voiceNote"></p></div>
     <div class="tips">
-      <span class="lbl">Voces más naturales, gratis</span>
-      <p>Las voces las pone tu teléfono, sin límite de uso. Las de mejor calidad hay que descargarlas una vez:</p>
-      <p><b>iPhone:</b> <span class="path">Ajustes › Accesibilidad › Contenido leído › Voces › Español</span>. Descarga una voz que diga <b>Mejorada</b> o <b>Premium</b> (por ejemplo Mónica, Paulina o Jorge).</p>
-      <p><b>Android:</b> <span class="path">Ajustes › Sistema › Idiomas › Salida de texto a voz</span>. Elige <b>Servicios de voz de Google</b> e instala el español en alta calidad.</p>
-      <p><b>Computador:</b> Microsoft Edge trae voces marcadas <b>Natural</b> que suenan muy bien.</p>
-      <p>Después de descargar, recarga esta página y elige la voz nueva. Las voces recomendadas aparecen con ★.</p>
+      <span class="lbl">¿Suena robótica? Usa tu voz o una voz natural</span>
+      <p>Las voces del teléfono tienen ese límite. Para escuchar un PDF <b>con tu propia voz</b> o con una voz natural, conviértelo en audio con el <b>Estudio Lectora</b> de tu Mac (carpeta <span class="path">LectoraEstudio</span> en tu usuario). Después pasa el .zip al celular por AirDrop y ábrelo aquí con <b>Abrir</b>.</p>
+      <span class="lbl">Batería</span>
+      <p>Los audios del Mac son lo que menos batería gasta: puedes <b>bloquear el teléfono</b> y siguen sonando.</p>
+      <p>Con las voces del teléfono la pantalla tiene que seguir encendida. Usa <b>Pantalla negra</b>: en iPhone y en la mayoría de los Android, una pantalla completamente negra casi no gasta.</p>
+      <span class="lbl">Mejores voces del teléfono</span>
+      <p><b>iPhone:</b> <span class="path">Ajustes › Accesibilidad › Contenido leído › Voces</span>, entra a <b>Español</b> y a <b>English</b> y descarga voces que digan <b>Mejorada</b> o <b>Premium</b>.</p>
+      <p><b>Android:</b> <span class="path">Ajustes › Sistema › Idiomas › Salida de texto a voz</span> › Servicios de voz de Google › instala español e inglés.</p>
     </div>
   </div>
 </div>
@@ -194,17 +220,18 @@ if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch
 const SAMPLE = {key:'ejemplo', name:'Ejemplo: cómo usar la Lectora', sample:true, pages:[
   ['CÓMO USAR LA LECTORA',
    'Esta es una página de ejemplo para que escuches cómo funciona antes de abrir tus propios archivos.',
-   'Toca Abrir PDF, elige un documento de tu teléfono y el texto aparecerá aquí, separado por páginas.',
+   'Toca Abrir, elige un PDF de tu teléfono y el texto aparecerá aquí, separado por páginas.',
    'Luego toca el botón grande de reproducir.',
    'La frase que se está leyendo queda marcada, y las páginas avanzan solas.',
-   'Si quieres saltar a otra parte, toca cualquier frase y la lectura seguirá desde ahí.',
-   'La voz la pone tu propio teléfono, así que no hay límite de páginas, de palabras ni de tiempo, y el documento no se envía a ningún servidor.'],
-  ['VOCES MÁS NATURALES',
-   'Para que suene más natural, descarga una voz de alta calidad en los ajustes del teléfono.',
-   'En iPhone ve a Ajustes, Accesibilidad, Contenido leído, Voces, Español, y descarga una voz marcada como mejorada o premium.',
-   'En Android abre los ajustes de texto a voz, elige los servicios de voz de Google e instala el español.',
-   'Después vuelve a esta página, toca el botón Voz y elige la nueva voz de la lista.',
-   'La Lectora recuerda en qué frase quedaste en cada documento, aunque cierres la página.']
+   'Si quieres saltar a otra parte, toca cualquier frase y la lectura seguirá desde ahí.'],
+  ['TU PROPIA VOZ',
+   'Las voces del teléfono suenan algo robóticas.',
+   'Para escuchar un documento con tu propia voz, o con una voz natural, conviértelo en audio con el Estudio Lectora de tu Mac.',
+   'Después pasa el archivo al celular por AirDrop y ábrelo aquí con el mismo botón Abrir.',
+   'Esos audios gastan muy poca batería, porque puedes bloquear el teléfono mientras escuchas.'],
+  ['ENGLISH TOO',
+   'The Lectora also reads English, and it picks the right voice for every sentence.',
+   'Un documento que mezcla los dos idiomas se lee sin que tengas que cambiar nada.']
 ]};
 
 const store = {
@@ -213,30 +240,42 @@ const store = {
   del(k){ try{ localStorage.removeItem('lectora:'+k); }catch(e){} }
 };
 
-/* ---------- IndexedDB: guarda el texto de cada documento ---------- */
+/* ---------- IndexedDB: texto de cada documento y audios del Mac ---------- */
 let dbp = null;
 function idb(){
   if(!dbp) dbp = new Promise((res,rej)=>{
     try{
-      const r = indexedDB.open('lectora',1);
-      r.onupgradeneeded = ()=> r.result.createObjectStore('docs',{keyPath:'key'});
+      const r = indexedDB.open('lectora',2);
+      r.onupgradeneeded = ()=>{
+        const db = r.result;
+        if(!db.objectStoreNames.contains('docs')) db.createObjectStore('docs',{keyPath:'key'});
+        if(!db.objectStoreNames.contains('audio')) db.createObjectStore('audio');
+      };
       r.onsuccess = ()=> res(r.result); r.onerror = ()=> rej(r.error);
     }catch(e){ rej(e); }
   });
   return dbp;
 }
-async function dbDo(mode, fn){
+async function dbDo(storeName, mode, fn){
   try{
     const db = await idb();
     return await new Promise((res,rej)=>{
-      const tx = db.transaction('docs',mode); const r = fn(tx.objectStore('docs'));
-      tx.oncomplete = ()=> res(r && r.result); tx.onerror = ()=> rej(tx.error);
+      const tx = db.transaction(storeName,mode); const r = fn(tx.objectStore(storeName));
+      tx.oncomplete = ()=> res(r && r.result); tx.onerror = ()=> rej(tx.error); tx.onabort = ()=> rej(tx.error);
     });
   }catch(e){ return null; }
 }
-const dbPut = d => dbDo('readwrite', s=>s.put(d));
-const dbGet = k => dbDo('readonly', s=>s.get(k));
-const dbDel = k => dbDo('readwrite', s=>s.delete(k));
+const dbPut = d => dbDo('docs','readwrite', s=>s.put(d));
+const dbGet = k => dbDo('docs','readonly', s=>s.get(k));
+const dbDel = k => Promise.all([dbDo('docs','readwrite', s=>s.delete(k)), dbDo('audio','readwrite', s=>s.delete(k))]);
+async function audioPut(k, blob){
+  try{
+    const db = await idb();
+    await new Promise((res,rej)=>{ const tx = db.transaction('audio','readwrite'); tx.objectStore('audio').put(blob,k); tx.oncomplete = res; tx.onerror = ()=>rej(tx.error); tx.onabort = ()=>rej(tx.error); });
+    return true;
+  }catch(e){ return false; }
+}
+const audioGet = k => dbDo('audio','readonly', s=>s.get(k));
 
 /* ---------- Extracción y limpieza del texto ---------- */
 function pageLines(content){
@@ -252,10 +291,9 @@ function pageLines(content){
   if(cur.trim()) lines.push(cur);
   return lines.map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean);
 }
-const isPageNum = l => /^[-–—\s]*(p[aá]g(ina)?\.?\s*)?\d+(\s*(de|\/)\s*\d+)?[-–—\s]*$/i.test(l);
+const isPageNum = l => /^[-–—\s]*(p[aá]g(ina)?\.?\s*|page\s*)?\d+(\s*(de|of|\/)\s*\d+)?[-–—\s]*$/i.test(l);
 const norm = l => l.toLowerCase().replace(/\d+/g,'#').replace(/\s+/g,' ').trim();
 function stripRepeats(pages){
-  // quita encabezados y pies que se repiten en muchas páginas
   const count = new Map();
   pages.forEach(ls=>{
     new Set([...ls.slice(0,2), ...ls.slice(-2)].map(norm)).forEach(k=>count.set(k,(count.get(k)||0)+1));
@@ -279,7 +317,7 @@ function joinLines(lines){
   }
   return out;
 }
-const ABBR = /(?:\b(?:arts?|inc|núm|nº|n°|nro|sr|sra|srta|dr|dra|lic|etc|págs?|pp?|caps?|vol|ej|cfr|vid|op|cit|ss|sgtes?|ed|av|dto|dfl|ord|aprox|fig|tel|cía|ltda|ee\.uu)|\b[A-Za-zÁÉÍÓÚÑ]|\d+)\.$/i;
+const ABBR = /(?:\b(?:arts?|inc|núm|nº|n°|nro|sr|sra|srta|dr|dra|mr|mrs|ms|lic|etc|págs?|pp?|caps?|vol|ej|cfr|vid|op|cit|ss|sgtes?|ed|av|dto|dfl|ord|aprox|fig|tel|cía|ltda|vs|e\.g|i\.e|no|st|jr)|\b[A-Za-zÁÉÍÓÚÑ]|\d+)\.$/i;
 function chop(t, max=220){
   const r = [];
   while(t.length > max){
@@ -307,43 +345,82 @@ function splitSentences(text){
   return out.filter(s=>/[\p{L}\p{N}]/u.test(s));
 }
 
+/* ---------- Idioma de cada frase ---------- */
+const ES = new Set('de la que el en y los se del las un por con una su para es al lo como más pero sus le ya o este sí porque esta entre cuando muy sin sobre también me hasta hay donde quien desde todo nos durante todos uno les ni contra otros ese eso ante ellos e esto mí antes algunos qué unos yo otro otras otra él tanto esa estos mucho quienes nada muchos cual poco ella estar estas algunas algo nosotros artículo ley será podrá deberá'.split(' '));
+const EN = new Set('the of and to in is that it for was on are as with his they at be this have from or one had by but not what all were we when your can said there use an each which she do how their if will up other about out many then them these so some her would make like him into time has look two more write go see number way could people my than first been call who its now find long down day did get come made may part shall any such'.split(' '));
+function detect(s, fallback){
+  if(/[ñ¿¡áéíóú]/i.test(s)) return 'es';
+  const words = s.toLowerCase().match(/[a-záéíóúñü']+/g) || [];
+  let es = 0, en = 0;
+  for(const w of words){ if(ES.has(w)) es++; if(EN.has(w)) en++; }
+  return es > en ? 'es' : en > es ? 'en' : fallback;
+}
+
 /* ---------- Estado ---------- */
 let doc = null, flat = [], pageStarts = [], shownPage = 0;
 let idx = 0, playing = false, token = 0, lastStart = 0, stalledSince = 0;
-let voices = [], voice = null, rate = store.get('rate',1), wake = null, current = null;
+let voices = [], voiceBy = {es:null, en:null}, rate = store.get('rate',1), wake = null, current = null;
+const audio = new Audio(); audio.preload = 'auto';
+let audioUrl = null, lastTimeSave = 0;
+const isAudio = () => doc && doc.kind === 'audio';
 
 function setDoc(d, pos){
+  stop();
   doc = d; flat = []; pageStarts = [];
-  d.pages.forEach((sents,p)=>{ pageStarts.push(flat.length); sents.forEach(t=>flat.push({p,t})); });
+  let lang = 'es';
+  d.pages.forEach((sents,p)=>{
+    pageStarts.push(flat.length);
+    sents.forEach(x=>{
+      if(typeof x === 'string'){ lang = detect(x, lang); flat.push({p, t:x, l:lang}); }
+      else flat.push({p, t:x.t, l:x.l||'es', s:x.s, e:x.e});
+    });
+  });
   idx = Math.min(Math.max(0, pos|0), Math.max(0, flat.length-1));
   $('#docName').textContent = d.name;
   $('#pageCount').textContent = d.pages.length;
   $('#pageInput').max = d.pages.length;
   store.set('last', d.key);
+  if(audioUrl){ URL.revokeObjectURL(audioUrl); audioUrl = null; audio.removeAttribute('src'); audio.load(); }
+  $('#blackBtn').hidden = isAudio();
+  $('#voiceBtn').textContent = isAudio() ? (d.voice || 'Audio') : voiceLabel();
   renderPage(flat.length ? flat[idx].p : 0);
-  renderShelf(); updateMeta();
+  renderShelf(); updateMeta(); mediaMeta();
+}
+async function ensureAudio(){
+  if(!isAudio() || audioUrl) return !!audioUrl;
+  const blob = await audioGet(doc.key);
+  if(!blob){ showStatus('No encontré el audio de este documento en el teléfono. Ábrelo de nuevo con Abrir.', 'err'); return false; }
+  audioUrl = URL.createObjectURL(blob);
+  audio.src = audioUrl; audio.playbackRate = rate;
+  const saved = store.get('time:'+doc.key, null);
+  const t0 = saved != null ? saved : (flat[idx] ? flat[idx].s : 0);
+  const seek = ()=>{ try{ audio.currentTime = t0; }catch(e){} };
+  if(audio.readyState >= 1) seek(); else audio.addEventListener('loadedmetadata', seek, {once:true});
+  return true;
 }
 
 function renderPage(p){
   shownPage = p;
   const el = $('#page'); el.innerHTML = '';
   const folio = document.createElement('div'); folio.className = 'folio';
-  folio.innerHTML = `<span>Página ${p+1}</span><span>${doc.sample ? 'Ejemplo' : ''}</span>`;
+  folio.innerHTML = `<span>Página ${p+1}</span><span>${doc.sample ? 'Ejemplo' : isAudio() ? 'Audio' : ''}</span>`;
   el.appendChild(folio);
   const text = document.createElement('div'); text.className = 'text';
-  const sents = doc.pages[p] || [];
-  if(!sents.length){
+  const n = (p+1 < pageStarts.length ? pageStarts[p+1] : flat.length) - pageStarts[p];
+  if(!n){
     const e = document.createElement('p'); e.className = 'empty';
     e.textContent = 'Esta página no tiene texto que leer (puede ser una imagen o estar en blanco).';
     text.appendChild(e);
   }
   let para = document.createElement('p');
-  sents.forEach((t,j)=>{
+  for(let j=0;j<n;j++){
+    const i = pageStarts[p]+j, t = flat[i].t;
     if(isHeading(t) && para.childNodes.length){ text.appendChild(para); para = document.createElement('p'); }
-    const s = document.createElement('span'); s.className = 's'; s.dataset.i = pageStarts[p]+j; s.textContent = t + ' ';
+    const s = document.createElement('span'); s.className = 's'; s.dataset.i = i; s.textContent = t + ' ';
+    if(flat[i].l === 'en') s.lang = 'en';
     para.appendChild(s);
     if(isHeading(t)){ para.style.fontWeight = '600'; text.appendChild(para); para = document.createElement('p'); }
-  });
+  }
   if(para.childNodes.length) text.appendChild(para);
   el.appendChild(text);
   $('#pageInput').value = p+1;
@@ -355,12 +432,17 @@ function mark(scroll){
   const s = document.querySelector(`.s[data-i="${idx}"]`);
   if(s){
     s.classList.add('on');
-    if(scroll){
+    if(scroll && $('#blackout').hidden){
       const r = s.getBoundingClientRect();
-      const bottomLimit = window.innerHeight - 190;
-      if(r.top < 70 || r.bottom > bottomLimit) s.scrollIntoView({block:'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+      if(r.top < 70 || r.bottom > window.innerHeight - 190) s.scrollIntoView({block:'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
     }
   }
+}
+function showSentence(scroll, force){
+  if(!force && document.visibilityState !== 'visible') return;
+  const s = flat[idx]; if(!s) return;
+  if(s.p !== shownPage) renderPage(s.p);
+  mark(scroll); updateMeta();
 }
 
 function fmtTime(sec){
@@ -372,23 +454,34 @@ function fmtTime(sec){
 function updateMeta(){
   const total = flat.length;
   const p = total ? flat[idx].p : 0;
-  const pct = total ? Math.round(idx/Math.max(1,total-1)*100) : 0;
+  let pct, left;
+  if(isAudio() && doc.duration){
+    const t = audioUrl ? audio.currentTime : (flat[idx] ? flat[idx].s : 0);
+    pct = Math.round(t/doc.duration*100); left = (doc.duration - t)/rate;
+  } else {
+    pct = total ? Math.round(idx/Math.max(1,total-1)*100) : 0;
+    let chars = 0; for(let i=idx;i<total;i++) chars += flat[i].t.length;
+    left = chars/(15*rate);
+  }
   $('#where').textContent = `Página ${p+1} de ${doc.pages.length} · ${pct}%`;
-  let chars = 0; for(let i=idx;i<total;i++) chars += flat[i].t.length;
-  $('#left').textContent = total ? 'quedan ~' + fmtTime(chars/(15*rate)) : '';
+  $('#left').textContent = total ? 'quedan ~' + fmtTime(left) : '';
   $('#bar').style.width = pct + '%';
+  $('#blackText').textContent = `${playing ? 'Leyendo' : 'En pausa'} · página ${p+1} de ${doc.pages.length}`;
 }
 function save(){
   if(!doc) return;
   store.set('pos:'+doc.key, idx);
+  if(isAudio() && audioUrl) store.set('time:'+doc.key, audio.currentTime);
   const lib = store.get('lib',[]); const it = lib.find(x=>x.key===doc.key);
   if(it){ it.page = flat.length ? flat[idx].p+1 : 1; store.set('lib',lib); }
 }
 
-/* ---------- Lectura en voz alta ---------- */
+/* ---------- Reproducción ---------- */
 function setPlayIcon(){
   $('#playIcon').innerHTML = playing ? '<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>' : '<path d="M7 4v16l13-8z"/>';
   $('#play').setAttribute('aria-label', playing ? 'Pausar' : 'Leer');
+  if('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+  if(doc) updateMeta();
 }
 async function holdScreen(on){
   try{
@@ -396,20 +489,22 @@ async function holdScreen(on){
     if(!on && wake){ await wake.release(); wake = null; }
   }catch(e){ wake = null; }
 }
+
+// Voces del teléfono
 function speak(){
   const my = ++token;
   const s = flat[idx];
   if(!s){ stop(); return; }
-  if(s.p !== shownPage) renderPage(s.p);
-  mark(true); updateMeta(); save();
+  showSentence(true); save();
   const u = new SpeechSynthesisUtterance(s.t);
-  if(voice){ u.voice = voice; u.lang = voice.lang; } else u.lang = 'es-ES';
+  const v = voiceBy[s.l] || voiceBy.es;
+  if(v){ u.voice = v; u.lang = v.lang; } else u.lang = s.l === 'en' ? 'en-US' : 'es-ES';
   u.rate = rate;
   u.onstart = ()=>{ if(my===token) lastStart = Date.now(); };
   u.onend = ()=>{
     if(my!==token || !playing) return;
     if(idx < flat.length-1){ idx++; speak(); }
-    else { stop(); idx = flat.length-1; showStatus('Terminaste de leer este documento.'); }
+    else { stop(); showStatus('Terminaste de leer este documento.'); }
   };
   u.onerror = e=>{
     if(my!==token || !playing) return;
@@ -423,70 +518,147 @@ function speak(){
     setTimeout(()=>{ if(my===token && playing) synth.speak(u); }, 90);
   } else synth.speak(u);
 }
-function play(){
-  if(!synth){ showStatus('Este navegador no puede leer en voz alta. Abre la página en Safari o Chrome.', 'err'); return; }
-  if(!flat.length) return;
-  hideStatus();
-  playing = true; setPlayIcon(); holdScreen(true); speak();
-}
-function stop(){
-  playing = false; token++; if(synth) synth.cancel(); setPlayIcon(); holdScreen(false);
-}
-function jump(i){
-  idx = Math.min(Math.max(0,i), flat.length-1);
-  if(playing) speak();
-  else { if(flat[idx] && flat[idx].p!==shownPage) renderPage(flat[idx].p); mark(true); updateMeta(); save(); }
-}
-// Algunos teléfonos cortan la voz sin avisar (pantalla bloqueada, llamadas). Si pasa, retoma la frase.
+// Algunos teléfonos cortan la voz sin avisar. Si pasa, retoma la frase.
 setInterval(()=>{
-  if(!playing || !synth) return;
+  if(!playing || isAudio() || !synth) return;
   if(synth.speaking || synth.pending){ stalledSince = 0; return; }
   if(Date.now()-lastStart < 1500) return;
   if(!stalledSince){ stalledSince = Date.now(); return; }
   if(Date.now()-stalledSince > 2500 && document.visibilityState==='visible') speak();
 }, 1000);
-document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && playing) holdScreen(true); });
+
+// Audios del Mac
+function sentenceAt(t){
+  let lo = 0, hi = flat.length-1, ans = 0;
+  while(lo <= hi){ const m = (lo+hi)>>1; if(flat[m].s <= t + 0.05){ ans = m; lo = m+1; } else hi = m-1; }
+  return ans;
+}
+audio.addEventListener('timeupdate', ()=>{
+  if(!isAudio() || !flat.length) return;
+  const i = sentenceAt(audio.currentTime);
+  if(i !== idx){ idx = i; showSentence(true); }
+  if(Date.now() - lastTimeSave > 4000){ lastTimeSave = Date.now(); save(); if(document.visibilityState==='visible') updateMeta(); }
+});
+audio.addEventListener('ended', ()=>{ playing = false; setPlayIcon(); store.set('time:'+doc.key, 0); showStatus('Terminaste de escuchar este documento.'); });
+audio.addEventListener('pause', ()=>{ if(isAudio() && playing){ playing = false; setPlayIcon(); save(); } });
+audio.addEventListener('play', ()=>{ if(isAudio() && !playing){ playing = true; setPlayIcon(); } });
+
+async function play(){
+  if(!flat.length) return;
+  hideStatus();
+  if(isAudio()){
+    if(!(await ensureAudio())) return;
+    playing = true; setPlayIcon();
+    try{ await audio.play(); }catch(e){ playing = false; setPlayIcon(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
+    return;
+  }
+  if(!synth){ showStatus('Este navegador no puede leer en voz alta. Abre la página en Safari o Chrome.', 'err'); return; }
+  playing = true; setPlayIcon(); holdScreen(true); speak();
+}
+function stop(){
+  const was = playing;
+  playing = false; token++;
+  if(synth) synth.cancel();
+  if(!audio.paused) audio.pause();
+  holdScreen(false);
+  if(was) save();
+  setPlayIcon();
+}
+function jump(i){
+  if(!flat.length) return;
+  idx = Math.min(Math.max(0,i), flat.length-1);
+  if(isAudio()){
+    if(audioUrl) audio.currentTime = flat[idx].s; else store.set('time:'+doc.key, flat[idx].s);
+    showSentence(true, true); save(); return;
+  }
+  if(playing) speak(); else { showSentence(true, true); save(); }
+}
+
+/* ---------- Controles de la pantalla bloqueada ---------- */
+function mediaMeta(){
+  if(!('mediaSession' in navigator) || !doc) return;
+  try{
+    navigator.mediaSession.metadata = new MediaMetadata({title: doc.name, artist: 'Lectora' + (doc.voice ? ' · ' + doc.voice : ''),
+      artwork:[{src:'icons/icon-512.png', sizes:'512x512', type:'image/png'}]});
+  }catch(e){}
+}
+if('mediaSession' in navigator){
+  const h = (a,f)=>{ try{ navigator.mediaSession.setActionHandler(a,f); }catch(e){} };
+  h('play', ()=>play()); h('pause', ()=>stop());
+  h('previoustrack', ()=>jump(idx-1)); h('nexttrack', ()=>jump(idx+1));
+  h('seekbackward', ()=>{ if(isAudio() && audioUrl) audio.currentTime = Math.max(0, audio.currentTime-15); else jump(idx-2); });
+  h('seekforward', ()=>{ if(isAudio() && audioUrl) audio.currentTime = Math.min(audio.duration||1e9, audio.currentTime+15); else jump(idx+2); });
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'){ if(playing && !isAudio()) holdScreen(true); if(doc){ showSentence(true); } }
+});
+
+/* ---------- Pantalla negra ---------- */
+let lastTap = 0;
+$('#blackBtn').onclick = ()=>{ $('#blackout').hidden = false; updateMeta(); };
+$('#blackout').addEventListener('click', ()=>{
+  const now = Date.now();
+  if(now - lastTap < 400){ $('#blackout').hidden = true; showSentence(true); }
+  lastTap = now;
+});
 
 /* ---------- Voces ---------- */
 const isGood = v => /premium|enhanced|mejorad|natural|neural|online|wavenet|studio|siri/i.test(v.name + ' ' + v.voiceURI);
-function score(v){
+function score(v, lang){
   let s = 0;
-  if(/^es/i.test(v.lang)) s += 100;
+  if(v.lang.toLowerCase().startsWith(lang)) s += 100;
   if(isGood(v)) s += 50;
   if(/google/i.test(v.name)) s += 20;
-  if(/es[-_]CL/i.test(v.lang)) s += 6; else if(/es[-_](MX|US|419)/i.test(v.lang)) s += 4;
+  if(lang==='es'){ if(/es[-_]CL/i.test(v.lang)) s += 6; else if(/es[-_](MX|US|419)/i.test(v.lang)) s += 4; }
+  if(lang==='en' && /en[-_]US/i.test(v.lang)) s += 4;
   if(v.localService) s += 1;
   return s;
 }
+function pickVoice(lang){
+  const saved = store.get('voice:'+lang, lang==='es' ? store.get('voice', null) : null);
+  const byScore = voices.slice().sort((a,b)=>score(b,lang)-score(a,lang));
+  return voices.find(v=>v.voiceURI===saved) || byScore.find(v=>v.lang.toLowerCase().startsWith(lang)) || null;
+}
+function voiceLabel(){ const v = voiceBy.es; return v ? v.name.replace(/\s*\(.*\)\s*/,'') : 'Voz'; }
 function loadVoices(){
   if(!synth) return;
-  voices = synth.getVoices().slice().sort((a,b)=>score(b)-score(a) || a.name.localeCompare(b.name));
-  const saved = store.get('voice', null);
-  voice = voices.find(v=>v.voiceURI===saved) || voices.find(v=>/^es/i.test(v.lang)) || voices[0] || null;
+  voices = synth.getVoices();
+  voiceBy.es = pickVoice('es'); voiceBy.en = pickVoice('en');
   fillVoices();
 }
 function fillVoices(){
   const all = $('#allLangs').checked;
-  const sel = $('#voiceSel'); sel.innerHTML = '';
-  const list = voices.filter(v=> all || /^es/i.test(v.lang) || v===voice);
-  if(!list.length){
-    const o = document.createElement('option'); o.textContent = 'Voz del sistema'; sel.appendChild(o);
+  for(const lang of ['es','en']){
+    const sel = $(lang==='es' ? '#voiceEs' : '#voiceEn'); sel.innerHTML = '';
+    const list = voices.filter(v=> all || v.lang.toLowerCase().startsWith(lang) || v===voiceBy[lang])
+      .sort((a,b)=>score(b,lang)-score(a,lang) || a.name.localeCompare(b.name));
+    if(!list.length){ const o = document.createElement('option'); o.textContent = 'Voz del sistema'; sel.appendChild(o); }
+    list.forEach(v=>{
+      const o = document.createElement('option'); o.value = v.voiceURI;
+      o.textContent = (isGood(v)?'★ ':'') + v.name + ' · ' + v.lang;
+      if(v===voiceBy[lang]) o.selected = true;
+      sel.appendChild(o);
+    });
   }
-  list.forEach(v=>{
-    const o = document.createElement('option'); o.value = v.voiceURI;
-    o.textContent = (isGood(v)?'★ ':'') + v.name + ' · ' + v.lang;
-    if(v===voice) o.selected = true;
-    sel.appendChild(o);
-  });
-  $('#voiceBtn').textContent = voice ? voice.name.replace(/\s*\(.*\)\s*/,'') : 'Voz';
-  $('#voiceNote').textContent = voices.some(v=>/^es/i.test(v.lang) && isGood(v)) ? '' : 'Aún no tienes una voz ★ en español. Mira abajo cómo descargarla.';
+  if(!isAudio()) $('#voiceBtn').textContent = voiceLabel();
+  const missing = ['es','en'].filter(l=>!voices.some(v=>v.lang.toLowerCase().startsWith(l) && isGood(v)));
+  $('#voiceNote').textContent = missing.length ? `Aún no tienes voces ★ en ${missing.map(l=>l==='es'?'español':'inglés').join(' ni en ')}. Mira abajo cómo descargarlas.` : '';
 }
 if(synth){ loadVoices(); synth.addEventListener ? synth.addEventListener('voiceschanged', loadVoices) : (synth.onvoiceschanged = loadVoices); }
+for(const lang of ['es','en']){
+  $(lang==='es' ? '#voiceEs' : '#voiceEn').onchange = e=>{
+    const v = voices.find(v=>v.voiceURI===e.target.value);
+    if(v){ voiceBy[lang] = v; store.set('voice:'+lang, v.voiceURI); }
+    fillVoices();
+    if(playing && !isAudio()) speak();
+  };
+}
 
 function setRate(r){
   rate = Math.round(r*100)/100; store.set('rate', rate);
   const txt = rate.toFixed(rate*10%1 ? 2 : 1).replace('.',',') + '×';
   $('#rateBtn').textContent = txt; $('#rateVal').textContent = txt; $('#rate').value = rate;
+  audio.playbackRate = rate;
   if(doc) updateMeta();
 }
 
@@ -500,15 +672,17 @@ function renderShelf(){
     const b = document.createElement('button');
     b.innerHTML = '<span class="n"></span><span class="p"></span>';
     b.querySelector('.n').textContent = it.name;
-    b.querySelector('.p').textContent = it.pages ? `pág. ${it.page||1} de ${it.pages}` : 'Cómo funciona';
+    const p = b.querySelector('.p');
+    p.textContent = it.pages ? `pág. ${it.page||1} de ${it.pages}` : 'Cómo funciona';
+    if(it.audio){ const t = document.createElement('span'); t.className = 'tag'; t.textContent = it.voice || 'Audio'; p.appendChild(t); }
     b.onclick = ()=> openFromShelf(it.key);
     c.appendChild(b);
     if(it.pages){
       const x = document.createElement('button'); x.className = 'x'; x.textContent = '×';
       x.setAttribute('aria-label','Quitar ' + it.name);
       x.onclick = async ()=>{
-        if(doc && doc.key===it.key){ stop(); setDoc(SAMPLE, store.get('pos:'+SAMPLE.key,0)); }
-        store.set('lib', store.get('lib',[]).filter(y=>y.key!==it.key)); store.del('pos:'+it.key);
+        if(doc && doc.key===it.key) setDoc(SAMPLE, store.get('pos:'+SAMPLE.key,0));
+        store.set('lib', store.get('lib',[]).filter(y=>y.key!==it.key)); store.del('pos:'+it.key); store.del('time:'+it.key);
         await dbDel(it.key); renderShelf();
       };
       c.appendChild(x);
@@ -518,19 +692,23 @@ function renderShelf(){
 }
 async function openFromShelf(key){
   if(doc && doc.key===key) return;
-  stop();
   if(key===SAMPLE.key){ setDoc(SAMPLE, store.get('pos:'+key,0)); return; }
   const d = await dbGet(key);
   if(d) setDoc(d, store.get('pos:'+key,0));
-  else showStatus('No encontré el texto guardado de ese documento en este teléfono. Ábrelo de nuevo con Abrir PDF.', 'err');
+  else showStatus('No encontré ese documento guardado en este teléfono. Ábrelo de nuevo con Abrir.', 'err');
+}
+function addToLibrary(d){
+  const lib = store.get('lib',[]).filter(x=>x.key!==d.key);
+  lib.unshift({key:d.key, name:d.name, pages:d.pages.length, page:1, audio:d.kind==='audio', voice:d.voice});
+  store.set('lib', lib.slice(0,20));
 }
 
-/* ---------- Abrir PDF ---------- */
 function showStatus(msg, kind){ const s = $('#status'); s.textContent = msg; s.className = 'status' + (kind ? ' '+kind : ''); s.hidden = false; }
 function hideStatus(){ $('#status').hidden = true; }
 
+/* ---------- Abrir un PDF ---------- */
 async function openPdf(file){
-  if(!pdfjs){ showStatus('No se pudo cargar el lector de PDF. Revisa tu conexión y recarga la página.', 'err'); return; }
+  if(!pdfjs){ showStatus('No se pudo cargar el lector de PDF. Recarga la página.', 'err'); return; }
   stop();
   showStatus('Abriendo ' + file.name + '…');
   try{
@@ -551,10 +729,7 @@ async function openPdf(file){
     }
     const key = file.name + '|' + file.size;
     const d = {key, name:file.name.replace(/\.pdf$/i,''), pages};
-    await dbPut(d);
-    const lib = store.get('lib',[]).filter(x=>x.key!==key);
-    lib.unshift({key, name:d.name, pages:pages.length, page:1});
-    store.set('lib', lib.slice(0,12));
+    await dbPut(d); addToLibrary(d);
     setDoc(d, store.get('pos:'+key,0));
     const empty = pages.filter(p=>!p.length).length;
     if(empty) showStatus(`Listo. ${empty} de ${pages.length} páginas no tienen texto (imágenes o páginas en blanco) y se saltarán.`);
@@ -565,51 +740,97 @@ async function openPdf(file){
   }
 }
 
+/* ---------- Abrir un audio del Estudio (zip sin comprimir: lectora.json + audio.m4a) ---------- */
+async function readZipEntries(file){
+  const tailLen = Math.min(file.size, 65557);
+  const tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
+  let e = -1;
+  for(let i = tailLen - 22; i >= 0; i--){ if(tail.getUint32(i,true) === 0x06054b50){ e = i; break; } }
+  if(e < 0) throw new Error('no es un zip');
+  const count = tail.getUint16(e+10,true), cdSize = tail.getUint32(e+12,true), cdOff = tail.getUint32(e+16,true);
+  const cd = new DataView(await file.slice(cdOff, cdOff+cdSize).arrayBuffer());
+  const out = {}; let o = 0;
+  for(let k=0;k<count;k++){
+    const method = cd.getUint16(o+10,true), size = cd.getUint32(o+20,true);
+    const nl = cd.getUint16(o+28,true), xl = cd.getUint16(o+30,true), cl = cd.getUint16(o+32,true), lho = cd.getUint32(o+42,true);
+    const name = new TextDecoder().decode(new Uint8Array(cd.buffer, o+46, nl));
+    const lh = new DataView(await file.slice(lho, lho+30).arrayBuffer());
+    const start = lho + 30 + lh.getUint16(26,true) + lh.getUint16(28,true);
+    out[name] = {method, blob: file.slice(start, start+size)};
+    o += 46 + nl + xl + cl;
+  }
+  return out;
+}
+async function openAudioZip(file){
+  stop();
+  showStatus('Abriendo ' + file.name + '…');
+  try{
+    const z = await readZipEntries(file);
+    const j = z['lectora.json'], a = z['audio.m4a'];
+    if(!j || !a || j.method !== 0 || a.method !== 0) throw new Error('Este .zip no viene del Estudio Lectora (o se volvió a comprimir). Usa el archivo tal como lo dejó el Mac en «listos».');
+    const meta = JSON.parse(await j.blob.text());
+    const key = 'audio|' + file.name + '|' + file.size;
+    showStatus('Guardando el audio en el teléfono…');
+    const blob = new Blob([await a.blob.arrayBuffer()], {type:'audio/mp4'});
+    if(!(await audioPut(key, blob))) throw new Error('No hay espacio para guardar el audio en el teléfono.');
+    const d = {key, kind:'audio', name:meta.name, voice:meta.voice, duration:meta.duration, pages:meta.pages};
+    await dbPut(d); addToLibrary(d);
+    setDoc(d, store.get('pos:'+key,0));
+    showStatus(`Listo: ${fmtTime(meta.duration)} de audio con ${meta.voice.toLowerCase()}. Puedes bloquear el teléfono mientras escuchas.`);
+  }catch(e){
+    showStatus('No pude abrir este archivo. ' + (e && e.message || e), 'err');
+  }
+}
+
 /* ---------- Controles ---------- */
-$('#file').addEventListener('change', e=>{ const f = e.target.files[0]; if(f) openPdf(f); e.target.value=''; });
+$('#file').addEventListener('change', e=>{
+  const f = e.target.files[0]; e.target.value = '';
+  if(!f) return;
+  if(/\.zip$/i.test(f.name) || /zip/.test(f.type)) openAudioZip(f); else openPdf(f);
+});
 $('#play').onclick = ()=> playing ? stop() : play();
 $('#prev').onclick = ()=> jump(idx-1);
 $('#next').onclick = ()=> jump(idx+1);
 $('#page').addEventListener('click', e=>{
   const s = e.target.closest('.s'); if(!s) return;
-  const i = +s.dataset.i;
-  idx = i;
-  if(playing) speak(); else { mark(false); updateMeta(); save(); }
+  jump(+s.dataset.i);
 });
 function goPage(p){
   if(!doc) return;
   p = Math.min(Math.max(0,p), doc.pages.length-1);
-  let i = pageStarts[p];
-  if(i >= flat.length) i = flat.length-1;
-  if(playing && flat[i] && flat[i].p===p){ idx = i; speak(); }
-  else { renderPage(p); if(doc.pages[p].length){ idx = i; mark(false); updateMeta(); save(); } window.scrollTo({top:0}); }
+  const next = p+1 < pageStarts.length ? pageStarts[p+1] : flat.length;
+  if(pageStarts[p] < next){ jump(pageStarts[p]); }
+  else renderPage(p);
+  window.scrollTo({top:0});
 }
 $('#prevPage').onclick = ()=> goPage(shownPage-1);
 $('#nextPage').onclick = ()=> goPage(shownPage+1);
 $('#pageInput').addEventListener('change', e=> goPage((+e.target.value||1)-1));
 
-function openSheet(){ $('#scrim').hidden = false; fillVoices(); }
+function openSheet(){
+  const a = isAudio();
+  $('#ttsVoices').hidden = a; $('#testRow').hidden = a;
+  $('#audioNote').hidden = !a;
+  if(a) $('#audioNote').textContent = `Este documento es un audio hecho en el Mac con ${doc.voice ? doc.voice.toLowerCase() : 'otra voz'}. Aquí solo cambias la velocidad.`;
+  $('#scrim').hidden = false; fillVoices();
+}
 function closeSheet(){ $('#scrim').hidden = true; }
 $('#voiceBtn').onclick = openSheet;
 $('#rateBtn').onclick = openSheet;
 $('#closeSheet').onclick = closeSheet;
 $('#scrim').addEventListener('click', e=>{ if(e.target.id==='scrim') closeSheet(); });
 $('#allLangs').onchange = fillVoices;
-$('#voiceSel').onchange = e=>{
-  voice = voices.find(v=>v.voiceURI===e.target.value) || voice;
-  if(voice) store.set('voice', voice.voiceURI);
-  fillVoices();
-  if(playing) speak();
-};
 $('#rate').oninput = e=> setRate(+e.target.value);
-$('#rate').onchange = ()=>{ if(playing) speak(); };
+$('#rate').onchange = ()=>{ if(playing && !isAudio()) speak(); };
 $('#test').onclick = ()=>{
   if(!synth) return;
   if(playing){ speak(); return; }
   synth.cancel();
-  const u = new SpeechSynthesisUtterance('Hola. Así suena esta voz leyendo tus documentos.');
-  if(voice){ u.voice = voice; u.lang = voice.lang; } else u.lang = 'es-ES';
-  u.rate = rate; current = u; synth.speak(u);
+  [['es','Hola. Así suena la voz en español.'],['en','And this is the English voice.']].forEach(([l,t])=>{
+    const u = new SpeechSynthesisUtterance(t); const v = voiceBy[l];
+    if(v){ u.voice = v; u.lang = v.lang; } else u.lang = l==='en' ? 'en-US' : 'es-ES';
+    u.rate = rate; synth.speak(u);
+  });
 };
 
 /* ---------- Instalar en la pantalla de inicio ---------- */
@@ -639,7 +860,7 @@ setRate(rate);
   if(last !== SAMPLE.key) d = await dbGet(last);
   d = d || SAMPLE;
   setDoc(d, store.get('pos:'+d.key, 0));
-  if(!synth) showStatus('Este navegador no puede leer en voz alta. Abre la página en Safari (iPhone) o Chrome (Android).', 'err');
+  if(!synth) showStatus('Este navegador no puede leer en voz alta con las voces del teléfono. Abre la página en Safari (iPhone) o Chrome (Android).', 'err');
 })();
 })();
 </script>

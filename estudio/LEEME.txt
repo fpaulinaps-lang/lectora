@@ -1,0 +1,16 @@
+ESTUDIO LECTORA — convierte PDFs en audio con tu voz o una voz natural
+
+1. Graba tu voz (una sola vez): doble clic en «Grabar mi voz».
+   También sirve una nota de voz del celular de unos 20 segundos: déjala en la carpeta «mi-voz».
+2. Deja los PDF que quieras escuchar en la carpeta «entrada».
+3. Doble clic en «Convertir». Elige «Mi voz» o «Voz natural».
+   Tarda menos de lo que dura el audio: un libro de 10 horas de lectura queda en unas 4 horas.
+   El Mac no se dormirá mientras trabaja.
+   Si lo cierras a medias, al volver a abrir «Convertir» sigue donde quedó.
+4. Los audios quedan en «listos» como .zip. Pásalos al celular por AirDrop o iCloud Drive
+   y ábrelos en la Lectora con el botón «Abrir».
+
+Lee en español y en inglés: detecta el idioma de cada frase sola.
+
+«Mi voz» toma tu grabación y le pone tu timbre a una voz natural: se parece a ti en el tono,
+pero no copia tu acento ni tu manera de hablar. Mientras más limpia sea la grabación, mejor.
