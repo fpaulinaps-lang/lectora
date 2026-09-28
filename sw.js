@@ -1,6 +1,6 @@
 // Guarda la app en el teléfono para que abra sin internet, y la aísla (COOP/COEP)
 // para que la voz pueda usar varios núcleos del procesador.
-const CACHE = 'lectora-v7';                 // la app: se renueva con cada versión
+const CACHE = 'lectora-v8';                 // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo (motor de voz, etc.): sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'voz/motor.js', 'voz/es-fonemas.js', 'voz/nucleo.js', 'voz/voz-worker.js', 'vendor/phonemizer.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
@@ -41,7 +41,8 @@ function aislar(r){
 // Primero la red, para que las mejoras lleguen; sin conexión (o si tarda demasiado), la copia guardada.
 async function redPrimero(req, clave, cacheNombre){
   const guardada = caches.match(clave);
-  const red = fetch(req, {cache: 'no-cache'}).then(r => {
+  // una petición de navegación no admite opciones: se pide por su dirección
+  const red = fetch(req.mode === 'navigate' ? req.url : req, {cache: 'no-cache'}).then(r => {
     if (r.ok) { const copia = r.clone(); caches.open(cacheNombre).then(c => c.put(clave, copia)); }
     return r;
   });
