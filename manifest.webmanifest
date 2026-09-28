@@ -1,7 +1,7 @@
 {
-  "name": "Lectora Libre y Gratis",
-  "short_name": "Lectora Libre y Gratis",
-  "description": "Lee tus PDFs y EPUBs en voz alta, gratis y sin límites.",
+  "name": "LectorLibre",
+  "short_name": "LectorLibre",
+  "description": "Lee en voz alta tus PDFs, EPUBs y fotos de documentos (con OCR), gratis y sin límites.",
   "lang": "es",
   "start_url": "./",
   "scope": "./",

@@ -16,20 +16,21 @@ if('serviceWorker' in navigator){
 }
 try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
 
-const SAMPLE = {key:'ejemplo', name:'Cómo usar la Lectora Libre y Gratis', sample:true, pages:[
+const SAMPLE = {key:'ejemplo', name:'Cómo usar LectorLibre', sample:true, pages:[
   ['CÓMO USAR LA LECTORA',
    'Esta es una página de ejemplo para que escuches cómo funciona.',
    'Toca Agregar, elige uno o varios PDF o EPUB de tu teléfono y quedarán guardados en tu biblioteca.',
+   'También puedes agregar fotos de páginas, o sacarlas con la cámara: LectorLibre reconoce el texto.',
    'Luego toca el botón grande de reproducir.',
    'La frase que se está leyendo queda marcada, y las páginas avanzan solas.',
    'Si quieres saltar a otra parte, toca cualquier frase y la lectura seguirá desde ahí.'],
   ['UNA VOZ MÁS NATURAL',
-   'La Lectora usa las voces que trae tu teléfono, sin internet y sin límites.',
+   'LectorLibre usa las voces que trae tu teléfono, sin internet y sin límites.',
    'Para que suene más natural, descarga una voz mejorada o premium en los ajustes del teléfono.',
    'En iPhone está en Ajustes, Accesibilidad, Contenido leído, Voces.',
    'Después, en el botón Voz, puedes probarla y cambiar la velocidad.'],
   ['ENGLISH TOO',
-   'The Lectora also reads English, and it picks the right voice for every sentence.',
+   'LectorLibre also reads English, and it picks the right voice for every sentence.',
    'Un documento que mezcla los dos idiomas se lee sin que tengas que cambiar nada.']
 ]};
 
@@ -232,7 +233,7 @@ function renderLibrary(){
     const pct = it.pct || 0;
     m.textContent = it.sample ? 'Ejemplo · 3 páginas'
       : `${it.pages} ${it.pages===1?'página':'páginas'}` + (pct ? ` · ${pct}% leído` : ' · sin empezar') + (it.opened ? ` · ${fmtFecha(it.opened)}` : '');
-    if(it.audio || it.epub){ const g = document.createElement('span'); g.className = 'tag'; g.textContent = it.epub ? 'EPUB' : (it.voice || 'audio'); m.appendChild(g); }
+    if(it.audio || it.epub || it.ocr){ const g = document.createElement('span'); g.className = 'tag'; g.textContent = it.epub ? 'EPUB' : it.ocr ? 'OCR' : (it.voice || 'audio'); m.appendChild(g); }
     b.append(t, m);
     if(!it.sample){ const p = document.createElement('div'); p.className = 'prog'; p.innerHTML = '<i></i>'; p.firstChild.style.width = pct + '%'; b.appendChild(p); }
     b.onclick = ()=> openBook(it.key);
@@ -257,7 +258,7 @@ async function removeBook(key){
 }
 function addToLibrary(d){
   const l = lib().filter(x=>x.key!==d.key);
-  l.push({key:d.key, name:d.name, pages:d.pages.length, page:1, pct:0, audio:d.kind==='audio', epub:d.kind==='epub', voice:d.voice, added:Date.now()});
+  l.push({key:d.key, name:d.name, pages:d.pages.length, page:1, pct:0, audio:d.kind==='audio', epub:d.kind==='epub', ocr:!!d.ocr, voice:d.voice, added:Date.now()});
   setLib(l);
 }
 
@@ -635,7 +636,7 @@ function jump(i){
 function mediaMeta(){
   if(!('mediaSession' in navigator) || !doc) return;
   try{
-    navigator.mediaSession.metadata = new MediaMetadata({title: doc.name, artist: 'Lectora', artwork:[{src:'icons/icon-512.png', sizes:'512x512', type:'image/png'}]});
+    navigator.mediaSession.metadata = new MediaMetadata({title: doc.name, artist: 'LectorLibre', artwork:[{src:'icons/icon-512.png', sizes:'512x512', type:'image/png'}]});
   }catch(e){}
 }
 if('mediaSession' in navigator){
@@ -705,6 +706,57 @@ function showStatus(msg, kind, frac){
 }
 function hideStatus(){ $('#status').hidden = true; }
 
+/* ---------- OCR: reconocer el texto de páginas escaneadas y de fotos ---------- */
+// Tesseract (vendor/tesseract) corre en el propio teléfono, sin internet. Español e inglés, modelos «fast».
+let ocrP = null;
+function motorOcr(){
+  if(!ocrP) ocrP = (async ()=>{
+    if(!window.Tesseract){
+      await new Promise((res, rej)=>{ const sc = document.createElement('script'); sc.src = 'vendor/tesseract/tesseract.min.js'; sc.onload = res; sc.onerror = ()=>rej(new Error('No se pudo cargar el reconocedor de texto. Recarga la app.')); document.head.appendChild(sc); });
+    }
+    const base = new URL('vendor/tesseract/', location.href).href;
+    return await Tesseract.createWorker(['spa', 'eng'], 1, {
+      workerPath: base + 'worker.min.js', corePath: base, langPath: base + 'lang', gzip: true,
+    });
+  })();
+  ocrP.catch(()=>{ ocrP = null; });
+  return ocrP;
+}
+async function soltarOcr(){
+  if(!ocrP) return;
+  try{ (await ocrP).terminate(); }catch(e){}
+  ocrP = null;
+}
+// Texto de una imagen (canvas o bitmap), en líneas.
+async function ocrLineas(imagen){
+  const w = await motorOcr();
+  const {data} = await w.recognize(imagen);
+  return (data.text || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(l => l && /[\p{L}\p{N}]{2}/u.test(l));
+}
+async function lienzoPagina(pdf, n, alto = 2200){
+  const pg = await pdf.getPage(n);
+  const v0 = pg.getViewport({scale: 1}), vp = pg.getViewport({scale: Math.min(4, alto / v0.height)});
+  const c = document.createElement('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  await pg.render({canvasContext: ctx, viewport: vp, intent: 'print'}).promise;
+  pg.cleanup();
+  return c;
+}
+function lienzoImagen(bmp, lado = 2400){
+  const k = Math.min(1, lado / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  return c;
+}
+// Aviso de avance con el tiempo que falta.
+function avanceOcr(nombre, hechas, total, t0){
+  const porPag = hechas ? (performance.now() - t0) / hechas / 1000 : 0;
+  const falta = porPag ? Math.round(porPag * (total - hechas)) : 0;
+  showStatus(`${nombre}: reconociendo el texto (OCR), página ${Math.min(hechas + 1, total)} de ${total}` +
+    (falta > 20 ? ` · faltan ~${fmtTime(falta)}` : '') + '. Deja la app abierta.', null, hechas / total);
+}
+
 async function importPdf(file){
   if(!pdfjs) throw new Error('No se pudo cargar el lector de PDF. Recarga la página.');
   const data = new Uint8Array(await file.arrayBuffer());
@@ -716,15 +768,53 @@ async function importPdf(file){
     pg.cleanup();
     if(i%3===0 || i===pdf.numPages) showStatus(`${file.name}: sacando el texto, página ${i} de ${pdf.numPages}`, null, i/pdf.numPages);
   }
+  // Páginas escaneadas (sin texto, o con apenas un número de página): se reconoce el texto con OCR.
+  const escaneadas = raw.map((ls, i) => ls.join(' ').replace(/\s/g, '').length < 25 ? i : -1).filter(i => i >= 0);
+  if(escaneadas.length){
+    const t0 = performance.now();
+    try{
+      for(const [k, i] of escaneadas.entries()){
+        avanceOcr(file.name, k, escaneadas.length, t0);
+        raw[i] = await ocrLineas(await lienzoPagina(pdf, i + 1));
+      }
+    }finally{ await soltarOcr(); }
+  }
   const pages = stripRepeats(raw).map(ls=>splitSentences(joinLines(ls)));
-  if(!pages.some(p=>p.length)) throw new Error(`«${file.name}» no tiene texto, solo imágenes de las páginas (es un escaneo). Pásalo antes por un programa de OCR.`);
+  if(!pages.some(p=>p.length)) throw new Error(`No encontré texto en «${file.name}», ni siquiera con OCR. Si es una foto, prueba con más luz y la hoja derecha.`);
   const key = file.name + '|' + file.size;
-  const d = {key, name:file.name.replace(/\.pdf$/i,''), pages};
+  const d = {key, name:file.name.replace(/\.pdf$/i,''), pages, ocr: escaneadas.length || undefined};
   const portada = await portadaPdf(pdf);
   if(portada){ await kv.put('portadas', key, portada); urlsPortada.delete(key); }
   await dbPut(d); addToLibrary(d);
   return d;
 }
+// Fotos de páginas (o sacadas con la cámara): todas las elegidas juntas forman un libro, una página por foto.
+async function importFotos(fotos){
+  const raw = [], t0 = performance.now();
+  let portada = null;
+  try{
+    for(const [k, f] of fotos.entries()){
+      avanceOcr(fotos.length === 1 ? f.name : 'Fotos', k, fotos.length, t0);
+      let bmp;
+      try{ bmp = await createImageBitmap(f); }
+      catch(e){ throw new Error(`No pude abrir la foto «${f.name}».`); }
+      if(!portada) portada = await miniatura(bmp);
+      raw.push(await ocrLineas(lienzoImagen(bmp)));
+      bmp.close && bmp.close();
+    }
+  }finally{ await soltarOcr(); }
+  const pages = stripRepeats(raw).map(ls => splitSentences(joinLines(ls)));
+  if(!pages.some(p => p.length)) throw new Error('No encontré texto en las fotos. Prueba con más luz, la hoja derecha y sin sombras.');
+  const primera = fotos[0].name.replace(/\.[^.]+$/, '');
+  const fecha = new Date().toLocaleDateString('es-CL', {day: 'numeric', month: 'long'});
+  const nombre = fotos.length === 1 && !/^(IMG|image|foto|photo)[_ -]?\d*/i.test(primera) ? primera : `Fotos del ${fecha}`;
+  const key = 'fotos|' + fotos.map(f => f.name + f.size).join(',').slice(0, 200) + '|' + Date.now();
+  const d = {key, kind: 'fotos', name: nombre, pages, ocr: fotos.length};
+  if(portada){ await kv.put('portadas', key, portada); urlsPortada.delete(key); }
+  await dbPut(d); addToLibrary(d);
+  return d;
+}
+
 async function readZipEntries(file){
   const tailLen = Math.min(file.size, 65557);
   const tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
@@ -767,7 +857,7 @@ async function leerZip(ent){
     if(typeof DecompressionStream === 'undefined') throw new Error('Este navegador no puede descomprimir el archivo. Actualiza el sistema del teléfono.');
     return new Response(crudo.stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
   }
-  throw new Error('El archivo usa una compresión que la Lectora no conoce.');
+  throw new Error('El archivo usa una compresión que LectorLibre no conoce.');
 }
 
 async function importZip(file){
@@ -789,7 +879,12 @@ $('#file').addEventListener('change', async e=>{
   const files = [...e.target.files]; e.target.value = '';
   if(!files.length) return;
   const ok = [], malos = [];
-  for(const f of files){
+  const esFoto = f => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp|gif|bmp|tiff?)$/i.test(f.name);
+  const fotos = files.filter(esFoto);
+  if(fotos.length){
+    try{ ok.push(await importFotos(fotos)); }catch(err){ malos.push(err.message || String(err)); }
+  }
+  for(const f of files.filter(f => !esFoto(f))){
     try{
       showStatus(`Agregando ${f.name}…`);
       ok.push(/\.epub$/i.test(f.name) || /epub/.test(f.type) ? await importEpub(f)
@@ -933,7 +1028,7 @@ let installEvt = null;
 function showInstall(){
   if(standalone || store.get('installDone', false)) return;
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
-  $('#installText').textContent = installEvt ? 'Instala la Lectora para abrirla desde la pantalla de inicio, como cualquier app.'
+  $('#installText').textContent = installEvt ? 'Instala LectorLibre para abrirla desde la pantalla de inicio, como cualquier app.'
     : ios ? 'Para tenerla como app: toca Compartir (el cuadrado con la flecha) y luego «Agregar a inicio».'
           : 'Para tenerla como app: abre el menú ⋮ del navegador y toca «Instalar app» o «Agregar a pantalla principal».';
   $('#installBtn').hidden = !installEvt; $('#install').hidden = false;

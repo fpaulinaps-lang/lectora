@@ -7,11 +7,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Lectora Libre y Gratis">
+<meta name="apple-mobile-web-app-title" content="LectorLibre">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<title>Lectora Libre y Gratis</title>
+<title>LectorLibre</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap">
@@ -49,7 +49,7 @@ button{cursor:pointer}
 .top{position:sticky; top:0; padding-top:env(safe-area-inset-top,0px); z-index:5; background:var(--bg); border-bottom:1px solid var(--line)}
 .top-in{max-width:44rem; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:12px}
 .brand{font-family:var(--read); font-weight:600; font-size:1.25rem; letter-spacing:.01em; flex:1; color:var(--accent)}
-.brand span{font-family:var(--ui); font-size:.8rem; font-weight:700; color:var(--ink); background:var(--yellow); border-radius:4px; padding:1px 6px; margin-left:4px; vertical-align:3px; white-space:nowrap}
+.brand span{color:var(--ink); background:var(--yellow); border-radius:4px; padding:0 5px; margin-left:1px}
 .back{background:none; border:0; color:var(--accent); font-weight:700; padding:6px 0; white-space:nowrap}
 .doc-name{flex:1; min-width:0; color:var(--muted); font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .btn{display:inline-flex; align-items:center; justify-content:center; gap:6px; border:0; border-radius:999px; padding:9px 16px;
@@ -145,10 +145,10 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
 
 <header class="top"><div class="top-in">
   <button class="back" id="backBtn" hidden>‹ Biblioteca</button>
-  <div class="brand" id="brand">Lectora <span>Libre y Gratis</span></div>
+  <div class="brand" id="brand">Lector<span>Libre</span></div>
   <div class="doc-name" id="docName" hidden></div>
   <label class="btn" for="file" id="addBtn">+ Agregar</label>
-  <input class="sr" type="file" id="file" multiple accept="application/pdf,.pdf,application/epub+zip,.epub,application/zip,.zip">
+  <input class="sr" type="file" id="file" multiple accept="application/pdf,.pdf,application/epub+zip,.epub,application/zip,.zip,image/*">
 </div></header>
 
 <main>
@@ -162,7 +162,7 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
   <section id="libView">
     <div class="lib-head"><h1>Tu biblioteca</h1><span id="libCount"></span></div>
     <ul class="shelf" id="shelf"></ul>
-    <p class="hint" style="margin-top:14px">Toca «+ Agregar» para sumar PDFs o EPUBs; puedes elegir varios a la vez. Quedan guardados en el teléfono y desde aquí los abres cuando quieras.</p>
+    <p class="hint" style="margin-top:14px">Toca «+ Agregar» para sumar PDFs, EPUBs o fotos de páginas (también escaneos: LectorLibre reconoce el texto). Puedes elegir varios a la vez; las fotos elegidas juntas forman un libro. Quedan guardados en el teléfono y desde aquí los abres cuando quieras.</p>
   </section>
 
   <section id="readView" hidden>
@@ -198,7 +198,7 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
 
     <div id="engineBox" class="panel">
       <div class="panel">
-        <p class="hint">La Lectora usa las voces que trae tu teléfono: sin internet y sin límites.</p>
+        <p class="hint">LectorLibre usa las voces que trae tu teléfono: sin internet y sin límites.</p>
         <div class="field"><label for="voiceEs">Voz en español</label><select id="voiceEs"></select></div>
         <div class="field"><label for="voiceEn">Voz en inglés</label><select id="voiceEn"></select></div>
         <label class="check"><input type="checkbox" id="allLangs"> Mostrar voces de todos los idiomas</label>
@@ -215,7 +215,7 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
 
     <div class="tips">
       <span class="lbl">Para que suene natural</span>
-      <p><b>iPhone:</b> en <b>Ajustes › Accesibilidad › Contenido leído › Voces</b>, entra a Español (y a Inglés si lees en inglés) y descarga una voz que diga <b>Premium</b> o <b>Mejorada</b>. La Lectora la elige sola.</p>
+      <p><b>iPhone:</b> en <b>Ajustes › Accesibilidad › Contenido leído › Voces</b>, entra a Español (y a Inglés si lees en inglés) y descarga una voz que diga <b>Premium</b> o <b>Mejorada</b>. LectorLibre la elige sola.</p>
       <p><b>Android:</b> en <b>Ajustes › Sistema › Idiomas › Salida de texto a voz</b>, elige Google e instala el español.</p>
       <span class="lbl">Batería</span>
       <p>Con la pantalla encendida gasta más: usa <b>Pantalla negra</b> mientras escuchas.</p>
