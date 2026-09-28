@@ -16,23 +16,22 @@ function gauss(n){
   return a;
 }
 
+// Cambio de frecuencia con sinc enventanado (16 puntos). Un Hermite de 4 puntos es más rápido, pero al bajar
+// de 24 a 22 kHz no filtra y agrega aspereza; esto corre en el proceso aparte, así que la velocidad no se nota.
 export function remuestrear(x, de, a){
   if(de === a) return x;
   const razon = de / a, n = Math.floor(x.length / razon), y = new Float32Array(n);
-  const xLen = x.length;
+  const corte = Math.min(1, 1 / razon), R = 8;
   for(let i = 0; i < n; i++){
-    const p = i * razon;
-    const i0 = Math.floor(p);
-    const frac = p - i0;
-    const p0 = i0 > 0 ? x[i0 - 1] : x[0];
-    const p1 = x[i0];
-    const p2 = i0 + 1 < xLen ? x[i0 + 1] : p1;
-    const p3 = i0 + 2 < xLen ? x[i0 + 2] : p2;
-    const a0 = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
-    const a1 = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
-    const a2 = -0.5 * p0 + 0.5 * p2;
-    const a3 = p1;
-    y[i] = a0 * frac * frac * frac + a1 * frac * frac + a2 * frac + a3;
+    const c = i * razon, i0 = Math.floor(c);
+    let s = 0, w = 0;
+    for(let k = i0 - R + 1; k <= i0 + R; k++){
+      if(k < 0 || k >= x.length) continue;
+      const t = c - k, sinc = t === 0 ? 1 : Math.sin(Math.PI * t * corte) / (Math.PI * t * corte);
+      const ven = 0.5 + 0.5 * Math.cos(Math.PI * t / R);
+      const g = sinc * ven; s += x[k] * g; w += g;
+    }
+    y[i] = w ? s / w : 0;
   }
   return y;
 }

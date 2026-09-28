@@ -388,30 +388,51 @@ function primeAudio(){
   document.addEventListener(evt, primeAudio, {once: true, passive: true});
 });
 
+// Se leen varias frases seguidas en un solo enunciado (hasta ~400 letras, mismo idioma): así la voz no
+// se detiene ni reinicia la entonación en cada punto. La frase marcada avanza con los eventos de palabra.
+function tramo(desde){
+  const l = flat[desde].l, v = voiceBy[l] || voiceBy.es;
+  const enNube = v && v.localService === false;                // voces en la nube: una frase por vez (se cortan)
+  const fin = [desde];
+  let letras = flat[desde].t.length;
+  for(let j = desde + 1; j < flat.length && !enNube; j++){
+    const f = flat[j];
+    if(f.l !== l || f.h || isHeading(f.t) || letras + f.t.length > 400 || j - desde >= 8) break;
+    fin.push(j); letras += f.t.length + 1;
+  }
+  return fin;
+}
 function speak(continuando = false){
   const my = ++token;
   const s = flat[idx];
   if(!s){ stop(); return; }
   showSentence(true); save();
-  const u = new SpeechSynthesisUtterance(s.t);
+  const indices = tramo(idx), inicios = [];
+  let texto = '';
+  for(const j of indices){ if(texto) texto += ' '; inicios.push(texto.length); texto += flat[j].t; }
+  const u = new SpeechSynthesisUtterance(texto);
   const v = voiceBy[s.l] || voiceBy.es;
   if(v){ u.voice = v; u.lang = v.lang; } else u.lang = s.l === 'en' ? 'en-US' : 'es-ES';
   u.rate = rate;
-  u.onstart = ()=>{
-    if(my === token){
-      lastStart = Date.now();
-      stalledSince = 0;
-    }
+  u.onstart = ()=>{ if(my === token){ lastStart = Date.now(); stalledSince = 0; } };
+  u.onboundary = e=>{
+    if(my !== token || !playing) return;
+    lastStart = Date.now();
+    let k = 0; while(k + 1 < inicios.length && inicios[k + 1] <= e.charIndex) k++;
+    const i = indices[k];
+    if(i !== idx){ idx = i; showSentence(true); save(); }
   };
   u.onend = ()=>{
     if(my !== token || !playing) return;
-    if(idx < flat.length - 1){ idx++; speak(true); } else finished();
+    const ult = indices[indices.length - 1];
+    if(ult < flat.length - 1){ idx = ult + 1; speak(true); } else finished();
   };
   u.onerror = e=>{
     if(my !== token || !playing) return;
     if(e.error === 'interrupted' || e.error === 'canceled') return;
     if(e.error === 'not-allowed'){ stop(); showStatus('El teléfono bloqueó el audio. Toca el botón de reproducir otra vez.'); return; }
-    if(idx < flat.length - 1){ idx++; speak(true); } else stop();
+    const ult = indices[indices.length - 1];
+    if(ult < flat.length - 1){ idx = ult + 1; speak(true); } else stop();
   };
   window._u = u;
   lastStart = Date.now();
@@ -440,16 +461,19 @@ const esNovedad = v => NOVEDAD.test(v.name) || /speech\.synthesis\.voice\.|eloqu
 const isGood = v => /premium|enhanced|mejorad|natural|neural|wavenet|studio/i.test(v.name + ' ' + v.voiceURI);
 const PREFERIDAS = /^(Mónica|Monica|Paulina|Marisol|Jorge|Juan|Diego|Francisca|Samantha|Ava|Zoe|Evan|Allison|Susan|Nathan|Google)/i;
 function score(v, lang){
+  const nombre = v.name + ' ' + (v.voiceURI || '');
   let s = 0;
   if(v.lang.toLowerCase().startsWith(lang)) s += 100;
-  if(v.default) s += 60;                                       // La voz activa del sistema en iOS/Android arranca sin demora
-  if(/compact/i.test(v.voiceURI)) s += 45;                     // Voces compactas locales: inicio instantáneo (0 ms)
-  if(v.localService) s += 40;                                  // Local en el dispositivo
-  if(PREFERIDAS.test(v.name)) s += 25;
+  // La calidad manda: las «Premium» y «Mejoradas» suenan naturales; las «compactas» son las robóticas.
+  if(/premium/i.test(nombre)) s += 80;
+  else if(/enhanced|mejorad|natural|neural|wavenet|studio/i.test(nombre)) s += 60;
+  if(/compact/i.test(nombre)) s -= 30;
+  if(PREFERIDAS.test(v.name)) s += 15;
+  if(v.localService) s += 10;
+  if(/network|online|cloud/i.test(nombre)) s -= 20;            // en la nube: tardan en partir y se cortan en frases largas
+  if(v.default) s += 5;
   if(lang==='es'){ if(/es[-_]CL/i.test(v.lang)) s += 6; else if(/es[-_](MX|US|419)/i.test(v.lang)) s += 4; }
   if(lang==='en' && /en[-_]US/i.test(v.lang)) s += 4;
-  if(/enhanced|mejorad/i.test(v.name + ' ' + v.voiceURI)) s += 5; // Mejoradas disponibles, pero no prioritarias sobre la instantánea
-  if(/network|online|cloud|siri/i.test(v.name + ' ' + v.voiceURI)) s -= 50; // Evita voces en la nube que demoran varios segundos
   return s;
 }
 function pickVoice(lang){
@@ -531,7 +555,20 @@ decks[0].preload = 'auto'; decks[1].preload = 'auto';
 let deckActivo = 0;
 const deckUrls = [null, null];
 const deckIndices = [-1, -1];
-const PAUSA = 0.08, PAUSA_PAG = 0.35, ADELANTE = 8;
+const ADELANTE = 8;
+// Pausa después de cada frase, como al leer en voz alta: más larga tras un punto o al cambiar de párrafo o
+// página, corta si la frase se partió solo por ser muy larga. (Con una pausa fija de 80 ms las frases se atropellaban.)
+function pausaTras(i){
+  const s = flat[i], sig = flat[i + 1];
+  if(!s || !sig) return 0.3;
+  if(sig.p !== s.p) return 0.7;
+  if(s.h || isHeading(s.t) || sig.h || isHeading(sig.t) || sig.np) return 0.55;
+  const fin = s.t.trim().replace(/["'»”’)\]]+$/, '').slice(-1);
+  if(/[.!?…]/.test(fin)) return 0.38;
+  if(/[:;]/.test(fin)) return 0.28;
+  return 0.16;
+}
+const PAUSA_CORTE = 0.12;   // entre los dos trozos de la primera frase (va donde hay una coma)
 const NAT = {es: store.get('nat:es', 'ef_dora'), en: store.get('nat:en', 'af_heart')};
 const N = {
   M: null, listos: new Map(), enDisco: new Set(), enCurso: new Set(), esperas: new Map(),
@@ -594,6 +631,28 @@ const MU = 255;
 function aMu(a){ const o = new Uint8Array(a.length); for(let i=0;i<a.length;i++){ const x = Math.max(-1, Math.min(1, a[i])); const y = Math.sign(x) * Math.log1p(MU*Math.abs(x)) / Math.log1p(MU); o[i] = Math.round((y + 1) * 127.5); } return o; }
 const DE_MU = (()=>{ const t = new Float32Array(256); for(let i=0;i<256;i++){ const y = i/127.5 - 1; t[i] = Math.sign(y) * (Math.pow(1+MU, Math.abs(y)) - 1) / MU; } return t; })();
 function deMu(u){ const o = new Float32Array(u.length); for(let i=0;i<u.length;i++) o[i] = DE_MU[u[i]]; return o; }
+// Las frases generadas se guardan en 12 bits (1,5 bytes por muestra, ~130 MB por hora). El µ-law de 8 bits
+// que se usaba antes tiene calidad de teléfono: al volver a escuchar una frase se notaba granulada.
+function empacar(a){
+  const n = a.length, o = new Uint8Array(Math.ceil(n / 2) * 3);
+  let pico = 0; for(let i = 0; i < n; i++){ const v = Math.abs(a[i]); if(v > pico) pico = v; }
+  const g = pico > 0.98 ? 0.98 / pico : 1;               // sin recortar los picos (sonaría áspero)
+  const q = i => i < n ? (Math.max(-2048, Math.min(2047, Math.round(a[i] * g * 2047))) + 2048) : 2048;
+  for(let i = 0, k = 0; i < n; i += 2, k += 3){
+    const x = q(i), y = q(i + 1);
+    o[k] = x & 255; o[k + 1] = (x >> 8) | ((y & 15) << 4); o[k + 2] = y >> 4;
+  }
+  return {f: 'p12', n, d: o};
+}
+function desempacar(v){
+  if(v instanceof Uint8Array) return deMu(v);          // frases guardadas con la versión anterior
+  const {n, d} = v, a = new Float32Array(n);
+  for(let i = 0, k = 0; i < n; i += 2, k += 3){
+    a[i] = (((d[k] | ((d[k + 1] & 15) << 8))) - 2048) / 2047;
+    if(i + 1 < n) a[i + 1] = (((d[k + 1] >> 4) | (d[k + 2] << 4)) - 2048) / 2047;
+  }
+  return a;
+}
 
 function progreso(msg, n, t){
   if(t > 1000) showStatus(`${msg}: ${Math.round(n/1e6)} de ${Math.round(t/1e6)} MB. Solo pasa la primera vez; usa Wi-Fi.`, null, n/t);
@@ -735,8 +794,7 @@ async function generador(){
         N.medidas = (N.medidas || []).concat((a.length / N.M.SR) / Math.max(0.05, el)).slice(-6);
         // la primera frase incluye preparar el motor: se juzga la velocidad desde la tercera
         if(N.medidas.length >= 4) N.velocidadReal = N.medidas.slice(-4).reduce((x, y) => x + y) / 4;
-        const u8 = aMu(a);
-        await kv.put('pistas', clave(i), u8);
+        await kv.put('pistas', clave(i), empacar(a));
         N.enDisco.add(i); N.enCurso.delete(i);
         entregar(i, a);
         if(N.prep) actualizarPrep();
@@ -783,31 +841,31 @@ function asegurarGenerador(){
 async function clipDe(i){
   if(N.listos.has(i)) return N.listos.get(i);
   await cargarDisco();
-  const u8 = N.enDisco.has(i) ? await kv.get('pistas', clave(i)) : null;
-  if(u8){ const a = deMu(u8); N.listos.set(i, a); return a; }
+  const guardada = N.enDisco.has(i) ? await kv.get('pistas', clave(i)) : null;
+  if(guardada){ const a = desempacar(guardada); N.listos.set(i, a); return a; }
   asegurarGenerador();
   return await new Promise(res=>{ if(!N.esperas.has(i)) N.esperas.set(i, []); N.esperas.get(i).push(res); });
 }
 // Parte una frase en un primer trozo ultracorto (de unas 2 a 4 palabras, entre 7 y 22 caracteres)
 // para que el motor neural empiece a sonar en menos de 1 segundo.
 function partirFrase(t){
-  if(t.length < 20) return null;
-  let corte = -1;
-  const re = /[,;:—–!?]\s/g; let m;
+  const gpu = N.M && N.M.usaGPU();
+  // Con tarjeta gráfica la frase entera sale en ~1 s: partirla solo agrega una costura. Se parte solo si es muy larga.
+  const minimo = gpu ? 160 : 45;
+  if(t.length < minimo) return null;
+  // primero, en una coma (o ; : — ) entre la palabra 3 y ~90 letras: ahí la pausa es natural
+  const re = /[,;:—–]\s/g; let m;
   while((m = re.exec(t))){
-    if(m.index >= 6 && m.index <= 22){ corte = m.index + 1; break; }
-    if(m.index > 22) break;
+    if(m.index >= 15 && m.index <= 90){ const a = t.slice(0, m.index + 1).trim(), b = t.slice(m.index + 1).trim(); if(b.length >= 12) return [a, b, false]; }
+    if(m.index > 90) break;
   }
-  if(corte < 0){
-    corte = t.lastIndexOf(' ', 18);
-    if(corte < 6){
-      const sp = t.indexOf(' ', 8);
-      if(sp > 0 && sp <= 24) corte = sp;
-    }
-  }
-  if(corte < 5) return null;
+  if(gpu) return null;
+  // sin coma cerca: unas 6-8 palabras. Ese trozo se genera con una coma al final para que la entonación
+  // quede abierta (sin ella, la voz lo lee como una frase terminada).
+  const corte = t.lastIndexOf(' ', 45);
+  if(corte < 25) return null;
   const a = t.slice(0, corte).trim(), b = t.slice(corte).trim();
-  return (a.length >= 4 && b.length >= 4) ? [a, b] : null;
+  return b.length >= 12 ? [a, b, true] : null;
 }
 // La primera frase (la que va a sonar al tocar reproducir) se genera de forma prioritaria e instantánea:
 // si es larga, se parte en un primer trozo ultrarrápido y se pipelinea en paralelo (voz natural + timbre).
@@ -851,7 +909,7 @@ function prepararPrimera(i){
     });
     pr.resto = null;
     pr.a.then(a => {
-      kv.put('pistas', clave(i), aMu(a)).then(()=>{ N.enDisco.add(i); });
+      kv.put('pistas', clave(i), empacar(a)).then(()=>{ N.enDisco.add(i); });
       entregar(i, a);
     }).catch(()=>{})
       .finally(limpiar);
@@ -862,7 +920,7 @@ function prepararPrimera(i){
   // Pipelining paralelo óptimo:
   // 1. Worker 1 sintetiza partes[0] (ultracorto, listo en ~200-300ms).
   // 2. Apenas k1 termina: Worker 2 convierte el timbre de k1 mientras Worker 1 sintetiza partes[1] en paralelo.
-  const k1Promise = cargarNeural().then(()=> N.M.hablar(partes[0], s.l, getVozId(), 1));
+  const k1Promise = cargarNeural().then(()=> N.M.hablar(partes[2] ? partes[0] + ',' : partes[0], s.l, getVozId(), 1));
   pr.a = k1Promise.then(aTimbre);
   pr.resto = k1Promise.then(()=> N.M.hablar(partes[1], s.l, getVozId(), 1)).then(aTimbre);
 
@@ -870,9 +928,9 @@ function prepararPrimera(i){
   pr.a.then(()=>{ if(N.primera === pr) N.rapido = false; }).catch(()=>{});
 
   Promise.all([pr.a, pr.resto]).then(([a, b]) => {
-    const gap = Math.round(0.08 * N.M.SR), full = new Float32Array(a.length + gap + b.length);
+    const gap = Math.round(PAUSA_CORTE * N.M.SR), full = new Float32Array(a.length + gap + b.length);
     full.set(a); full.set(b, a.length + gap);
-    kv.put('pistas', clave(i), aMu(full)).then(()=>{ N.enDisco.add(i); });
+    kv.put('pistas', clave(i), empacar(full)).then(()=>{ N.enDisco.add(i); });
     entregar(i, full);
   }).catch(()=>{})
     .finally(limpiar);
@@ -901,7 +959,7 @@ async function precargarSiguiente(siguienteIdx, my){
   try{
     const a = await clipDe(siguienteIdx);
     if(my !== N.playTok || !playing || !a) return;
-    const pausa = (flat[siguienteIdx+1] && flat[siguienteIdx+1].p !== flat[siguienteIdx].p) ? PAUSA_PAG : PAUSA;
+    const pausa = pausaTras(siguienteIdx);
     cargarDeck(sigDeck, a, pausa);
     deckIndices[sigDeck] = siguienteIdx;
   }catch(e){}
@@ -955,7 +1013,7 @@ async function reproducirClip(i){
   }
   if(my !== N.playTok || !playing || !a) return;
 
-  const pausa = primerTrozo ? 0.08 : (flat[i+1] && flat[i+1].p !== flat[i].p) ? PAUSA_PAG : PAUSA;
+  const pausa = primerTrozo ? PAUSA_CORTE : pausaTras(i);
   cargarDeck(deckActivo, a, pausa);
   deckIndices[deckActivo] = i;
 
@@ -965,7 +1023,15 @@ async function reproducirClip(i){
   try{
     await d.play();
     if(primerTrozo && N.rapido) N.rapido = false;
-    precargarSiguiente(i + 1, my);
+    if(primerTrozo && N.resto){
+      // el otro reproductor recibe la segunda mitad apenas esté lista (la frase siguiente espera su turno)
+      const r = N.resto;
+      r.promesa.then(b => {
+        if(!b || r.my !== N.playTok || !playing || N.resto !== r) return;
+        const otro = 1 - deckActivo;
+        cargarDeck(otro, b, pausaTras(i)); deckIndices[otro] = 'resto' + i;
+      }).catch(()=>{});
+    } else precargarSiguiente(i + 1, my);
   }catch(e){
     if(my === N.playTok && e.name !== 'AbortError'){ stop(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
   }finally{
@@ -1011,18 +1077,26 @@ async function alTerminarDeck(dIndex){
 
   const r = N.resto;
   if(r && r.i === idx && r.my === N.playTok){
-    N.resto = null;
-    setWaiting(true);
-    let b = null; try{ b = await r.promesa; }catch(e){}
-    setWaiting(false);
-    if(r.my !== N.playTok || !playing) return;
-    if(b){
-      const pausa = (flat[idx+1] && flat[idx+1].p !== flat[idx].p) ? PAUSA_PAG : PAUSA;
-      cargarDeck(deckActivo, b, pausa);
-      try{ await decks[deckActivo].play(); }catch(e){}
-      precargarSiguiente(idx + 1, r.my);
-      return;
+    const otro = 1 - deckActivo;
+    if(deckIndices[otro] !== 'resto' + idx){
+      // todavía no estaba lista: esperarla y cargarla en el otro reproductor
+      setWaiting(true);
+      let b = null; try{ b = await r.promesa; }catch(e){}
+      setWaiting(false);
+      if(r.my !== N.playTok || !playing) return;
+      if(!b){ N.resto = null; reproducirClip(idx + 1 < flat.length ? idx + 1 : idx); return; }
+      cargarDeck(otro, b, pausaTras(idx)); deckIndices[otro] = 'resto' + idx;
     }
+    N.resto = null;
+    deckActivo = otro;
+    const d = decks[deckActivo];
+    d.playbackRate = rate; d.preservesPitch = true;
+    N.cambiando = true; N.ultimoCambioSrc = Date.now();
+    try{ await d.play(); }catch(e){}
+    finally{ setTimeout(()=>{ N.cambiando = false; }, 120); }
+    deckIndices[deckActivo] = idx;
+    precargarSiguiente(idx + 1, r.my);
+    return;
   }
 
   if(idx >= flat.length - 1){ finished(); return; }
@@ -1118,6 +1192,7 @@ async function play(){
     // Desbloquea ambos reproductores de audio con este toque (iOS exige un gesto para el primer sonido).
     N.priming = true;
     N.cambiando = true;
+    deckIndices[0] = -1; deckIndices[1] = -1;
     decks.forEach(d => {
       d.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
       d.play().catch(()=>{});
