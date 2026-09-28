@@ -1,6 +1,6 @@
 // Guarda la app en el teléfono para que abra sin internet, y la aísla (COOP/COEP)
 // para que la voz pueda usar varios núcleos del procesador.
-const CACHE = 'lectora-v4';
+const CACHE = 'lectora-v5';
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'voz/motor.js', 'voz/es-fonemas.js', 'voz/nucleo.js', 'voz/voz-worker.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 // Los modelos de voz los guarda el propio motor (voz/motor.js); aquí no se duplican.

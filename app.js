@@ -19,7 +19,7 @@ try{ navigator.storage && navigator.storage.persist && navigator.storage.persist
 const SAMPLE = {key:'ejemplo', name:'Cómo usar la Lectora', sample:true, pages:[
   ['CÓMO USAR LA LECTORA',
    'Esta es una página de ejemplo para que escuches cómo funciona.',
-   'Toca Agregar, elige uno o varios PDF de tu teléfono y quedarán guardados en tu biblioteca.',
+   'Toca Agregar, elige uno o varios PDF o EPUB de tu teléfono y quedarán guardados en tu biblioteca.',
    'Luego toca el botón grande de reproducir.',
    'La frase que se está leyendo queda marcada, y las páginas avanzan solas.',
    'Si quieres saltar a otra parte, toca cualquier frase y la lectura seguirá desde ahí.'],
@@ -184,7 +184,7 @@ function renderLibrary(){
     const pct = it.pct || 0;
     m.textContent = it.sample ? 'Ejemplo · 3 páginas'
       : `${it.pages} ${it.pages===1?'página':'páginas'}` + (pct ? ` · ${pct}% leído` : ' · sin empezar') + (it.opened ? ` · ${fmtFecha(it.opened)}` : '');
-    if(it.audio){ const g = document.createElement('span'); g.className = 'tag'; g.textContent = it.voice || 'audio'; m.appendChild(g); }
+    if(it.audio || it.epub){ const g = document.createElement('span'); g.className = 'tag'; g.textContent = it.epub ? 'EPUB' : (it.voice || 'audio'); m.appendChild(g); }
     b.append(t, m);
     if(!it.sample){ const p = document.createElement('div'); p.className = 'prog'; p.innerHTML = '<i></i>'; p.firstChild.style.width = pct + '%'; b.appendChild(p); }
     b.onclick = ()=> openBook(it.key);
@@ -208,7 +208,7 @@ async function removeBook(key){
 }
 function addToLibrary(d){
   const l = lib().filter(x=>x.key!==d.key);
-  l.push({key:d.key, name:d.name, pages:d.pages.length, page:1, pct:0, audio:d.kind==='audio', voice:d.voice, added:Date.now()});
+  l.push({key:d.key, name:d.name, pages:d.pages.length, page:1, pct:0, audio:d.kind==='audio', epub:d.kind==='epub', voice:d.voice, added:Date.now()});
   setLib(l);
 }
 
@@ -244,7 +244,7 @@ function setDoc(d, pos){
     pageStarts.push(flat.length);
     sents.forEach(x=>{
       if(typeof x === 'string'){ lang = detect(x, lang); flat.push({p, t:x, l:lang}); }
-      else flat.push({p, t:x.t, l:x.l||'es', s:x.s, e:x.e});
+      else { if(!x.l) lang = detect(x.t, lang); flat.push({p, t:x.t, l:x.l || lang, s:x.s, e:x.e, h:x.h, np:x.np}); }
     });
   });
   idx = Math.min(Math.max(0, pos|0), Math.max(0, flat.length-1));
@@ -276,11 +276,12 @@ function renderPage(p){
   let para = document.createElement('p');
   for(let j=0;j<n;j++){
     const i = pageStarts[p]+j, t = flat[i].t;
-    if(isHeading(t) && para.childNodes.length){ text.appendChild(para); para = document.createElement('p'); }
+    const titulo = isHeading(t) || flat[i].h;
+    if((titulo || flat[i].np) && para.childNodes.length){ text.appendChild(para); para = document.createElement('p'); }
     const s = document.createElement('span'); s.className = 's'; s.dataset.i = i; s.textContent = t + ' ';
     if(flat[i].l === 'en') s.lang = 'en';
     para.appendChild(s);
-    if(isHeading(t)){ para.style.fontWeight = '600'; text.appendChild(para); para = document.createElement('p'); }
+    if(titulo){ para.style.fontWeight = '600'; text.appendChild(para); para = document.createElement('p'); }
   }
   if(para.childNodes.length) text.appendChild(para);
   el.appendChild(text);
@@ -929,13 +930,36 @@ async function readZipEntries(file){
     const method = cd.getUint16(o+10,true), size = cd.getUint32(o+20,true);
     const nl = cd.getUint16(o+28,true), xl = cd.getUint16(o+30,true), cl = cd.getUint16(o+32,true), lho = cd.getUint32(o+42,true);
     const name = new TextDecoder().decode(new Uint8Array(cd.buffer, o+46, nl));
-    const lh = new DataView(await file.slice(lho, lho+30).arrayBuffer());
-    const start = lho + 30 + lh.getUint16(26,true) + lh.getUint16(28,true);
-    out[name] = {method, blob: file.slice(start, start+size)};
+    out[name] = {method, size, lho, file, get blob(){ return datosZip(this); }};
     o += 46 + nl + xl + cl;
   }
   return out;
 }
+// Los datos de una entrada del zip (sin descomprimir). Se lee la cabecera local recién cuando se necesita.
+function datosZip(ent){
+  const lector = {
+    async start(){
+      const lh = new DataView(await ent.file.slice(ent.lho, ent.lho + 30).arrayBuffer());
+      return ent.lho + 30 + lh.getUint16(26,true) + lh.getUint16(28,true);
+    },
+  };
+  return {
+    async arrayBuffer(){ const st = await lector.start(); return ent.file.slice(st, st + ent.size).arrayBuffer(); },
+    async text(){ return new TextDecoder().decode(await this.arrayBuffer()); },
+    async slice(){ const st = await lector.start(); return ent.file.slice(st, st + ent.size); },
+  };
+}
+// Contenido de una entrada, descomprimiendo si hace falta.
+async function leerZip(ent){
+  const crudo = await ent.blob.slice();
+  if(ent.method === 0) return crudo.arrayBuffer();
+  if(ent.method === 8){
+    if(typeof DecompressionStream === 'undefined') throw new Error('Este navegador no puede descomprimir el archivo. Actualiza el sistema del teléfono.');
+    return new Response(crudo.stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+  }
+  throw new Error('El archivo usa una compresión que la Lectora no conoce.');
+}
+
 async function importZip(file){
   const z = await readZipEntries(file);
   const j = z['lectora.json'], a = z['audio.m4a'];
@@ -943,7 +967,7 @@ async function importZip(file){
   const meta = JSON.parse(await j.blob.text());
   const key = 'audio|' + file.name + '|' + file.size;
   showStatus(`${file.name}: guardando el audio…`);
-  const blob = new Blob([await a.blob.arrayBuffer()], {type:'audio/mp4'});
+  const blob = new Blob([await a.blob.slice()], {type:'audio/mp4'});
   if(!(await kv.put('audio', key, blob) !== null)) throw new Error('No hay espacio para guardar el audio en el teléfono.');
   const d = {key, kind:'audio', name:meta.name, voice:meta.voice, duration:meta.duration, pages:meta.pages};
   await dbPut(d); addToLibrary(d);
@@ -956,7 +980,8 @@ $('#file').addEventListener('change', async e=>{
   for(const f of files){
     try{
       showStatus(`Agregando ${f.name}…`);
-      ok.push(/\.zip$/i.test(f.name) || /zip/.test(f.type) ? await importZip(f) : await importPdf(f));
+      ok.push(/\.epub$/i.test(f.name) || /epub/.test(f.type) ? await importEpub(f)
+            : /\.zip$/i.test(f.name) || /zip/.test(f.type) ? await importZip(f) : await importPdf(f));
     }catch(err){ malos.push(err.message || String(err)); }
   }
   renderLibrary();
@@ -964,6 +989,96 @@ $('#file').addEventListener('change', async e=>{
   else showStatus(ok.length === 1 ? `Agregado «${ok[0].name}».` : `Agregados ${ok.length} libros.`);
   setTimeout(()=>{ if(!malos.length) hideStatus(); }, 4000);
 });
+
+/* ---------- EPUB ---------- */
+const BLOQUES = new Set('p h1 h2 h3 h4 h5 h6 li blockquote div section article aside dd dt pre td th figcaption caption header footer tr table ul ol dl figure hr main body'.split(' '));
+const SEL_BLOQUES = [...BLOQUES].join(',');
+const limpio = t => t.replace(/\s+/g, ' ').trim();
+// textContent, pero un <br> cuenta como espacio (si no, «salto<br>de» se lee «saltode»)
+function textoDe(n){
+  if(n.nodeType === 3) return n.textContent;
+  if(n.nodeType !== 1) return '';
+  if((n.localName || '').toLowerCase() === 'br') return ' ';
+  let t = ''; for(const c of n.childNodes) t += textoDe(c); return t;
+}
+// Texto de un capítulo en bloques: {t, h} (h = título).
+function bloquesDe(html){
+  let d = new DOMParser().parseFromString(html, 'application/xhtml+xml');
+  if(d.getElementsByTagName('parsererror').length) d = new DOMParser().parseFromString(html, 'text/html');
+  const body = d.body || d.getElementsByTagName('body')[0];
+  if(!body) return [];
+  for(const e of [...body.querySelectorAll('script,style,nav')]) e.remove();
+  // llamadas a notas al pie (¹, [2], *): no se leen
+  for(const e of [...body.querySelectorAll('sup')]) if(/^[\s\[\(]*[\divx*†‡]+[\]\)\s]*$/i.test(e.textContent)) e.remove();
+  const out = [];
+  (function recorrer(el){
+    let suelto = '';
+    const soltar = ()=>{ const t = limpio(suelto); if(t) out.push({t}); suelto = ''; };
+    for(const n of el.childNodes){
+      if(n.nodeType === 3){ suelto += n.textContent; continue; }
+      if(n.nodeType !== 1) continue;
+      const tag = (n.localName || '').toLowerCase();
+      if(tag === 'br'){ suelto += ' '; continue; }
+      if(!BLOQUES.has(tag)){ suelto += textoDe(n); continue; }
+      soltar();
+      if(/^h[1-6]$/.test(tag)){ const t = limpio(textoDe(n)); if(t) out.push({t, h:true}); }
+      else if(n.querySelector(SEL_BLOQUES)) recorrer(n);
+      else { const t = limpio(textoDe(n)); if(t) out.push({t}); }
+    }
+    soltar();
+  })(body);
+  return out;
+}
+function rutaEpub(base, href){
+  const partes = (base + href.split('#')[0]).split('/'), out = [];
+  for(const p of partes){ if(p === '..') out.pop(); else if(p && p !== '.') out.push(p); }
+  return out.join('/');
+}
+async function importEpub(file){
+  const z = await readZipEntries(file);
+  const texto = async ruta => {
+    const ent = z[ruta] || z[decodeURIComponent(ruta)];
+    return ent ? new TextDecoder().decode(await leerZip(ent)) : null;
+  };
+  const xml = t => new DOMParser().parseFromString(t, 'application/xml');
+  // Con DRM, los capítulos vienen cifrados (encryption.xml también se usa solo para tipografías: eso no importa).
+  const cifrado = await texto('META-INF/encryption.xml');
+  if(cifrado && /CipherReference[^>]*URI="[^"]+\.(x?html?|xml)"/i.test(cifrado))
+    throw new Error(`«${file.name}» tiene protección anticopia (DRM) y no se puede leer fuera de la aplicación donde se compró.`);
+  const cont = await texto('META-INF/container.xml');
+  if(!cont) throw new Error(`«${file.name}» no parece un EPUB válido.`);
+  const opfRuta = xml(cont).getElementsByTagName('rootfile')[0]?.getAttribute('full-path');
+  const opfTxt = opfRuta && await texto(opfRuta);
+  if(!opfTxt) throw new Error(`«${file.name}» no parece un EPUB válido.`);
+  const opf = xml(opfTxt);
+  const base = opfRuta.includes('/') ? opfRuta.slice(0, opfRuta.lastIndexOf('/') + 1) : '';
+  const man = {};
+  for(const it of opf.getElementsByTagName('item')) man[it.getAttribute('id')] = {href: it.getAttribute('href'), tipo: it.getAttribute('media-type') || '', props: it.getAttribute('properties') || ''};
+  const orden = [...opf.getElementsByTagName('itemref')].filter(r => r.getAttribute('linear') !== 'no')
+    .map(r => man[r.getAttribute('idref')]).filter(x => x && /html/.test(x.tipo) && !/\bnav\b/.test(x.props));
+  const titulo = limpio(opf.getElementsByTagName('dc:title')[0]?.textContent || opf.getElementsByTagNameNS('*', 'title')[0]?.textContent || '');
+
+  // Un EPUB no tiene páginas: se arma una "página" cada ~2.500 letras, y cada capítulo empieza en página nueva.
+  const pages = []; let pag = [], letras = 0;
+  const cerrar = ()=>{ if(pag.length) pages.push(pag); pag = []; letras = 0; };
+  for(const [n, it] of orden.entries()){
+    showStatus(`${file.name}: leyendo el capítulo ${n + 1} de ${orden.length}`, null, (n + 1) / orden.length);
+    const html = await texto(rutaEpub(base, it.href));
+    if(!html) continue;
+    cerrar();
+    for(const b of bloquesDe(html)){
+      if(b.h){ if(letras > 600) cerrar(); pag.push({t:b.t, h:true}); letras += b.t.length; continue; }
+      splitSentences(b.t).forEach((t, k) => { pag.push(k === 0 ? {t, np:true} : t); letras += t.length; });
+      if(letras >= 2500) cerrar();
+    }
+  }
+  cerrar();
+  if(!pages.length) throw new Error(`«${file.name}» no tiene texto que leer.`);
+  const key = file.name + '|' + file.size;
+  const d = {key, kind:'epub', name: titulo || file.name.replace(/\.epub$/i,''), pages};
+  await dbPut(d); addToLibrary(d);
+  return d;
+}
 
 /* ---------- Controles del lector ---------- */
 $('#backBtn').onclick = showLibrary;
