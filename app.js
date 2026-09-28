@@ -366,6 +366,28 @@ async function holdScreen(on){
 
 /* ================= Motor 1: voces del teléfono ================= */
 let token = 0, lastStart = 0, stalledSince = 0, voices = [], voiceBy = {es:null, en:null};
+let audioCtx = null, synthPrimed = false;
+
+// Desbloquea y precalienta el subsistema de audio y síntesis de voz en iOS Safari al primer toque
+function primeAudio(){
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+  }catch(e){}
+  if(!synthPrimed && synth){
+    synthPrimed = true;
+    try{
+      const dummy = new SpeechSynthesisUtterance(' ');
+      dummy.volume = 0.01;
+      dummy.rate = 2;
+      synth.speak(dummy);
+    }catch(e){}
+  }
+}
+['touchstart', 'mousedown', 'keydown'].forEach(evt => {
+  document.addEventListener(evt, primeAudio, {once: true, passive: true});
+});
+
 function speak(continuando = false){
   const my = ++token;
   const s = flat[idx];
@@ -375,27 +397,41 @@ function speak(continuando = false){
   const v = voiceBy[s.l] || voiceBy.es;
   if(v){ u.voice = v; u.lang = v.lang; } else u.lang = s.l === 'en' ? 'en-US' : 'es-ES';
   u.rate = rate;
-  u.onstart = ()=>{ if(my===token) lastStart = Date.now(); };
+  u.onstart = ()=>{
+    if(my === token){
+      lastStart = Date.now();
+      stalledSince = 0;
+    }
+  };
   u.onend = ()=>{
-    if(my!==token || !playing) return;
-    if(idx < flat.length-1){ idx++; speak(true); } else finished();
+    if(my !== token || !playing) return;
+    if(idx < flat.length - 1){ idx++; speak(true); } else finished();
   };
   u.onerror = e=>{
-    if(my!==token || !playing) return;
-    if(e.error==='interrupted' || e.error==='canceled') return;
-    if(e.error==='not-allowed'){ stop(); showStatus('El teléfono bloqueó el audio. Toca el botón de reproducir otra vez.'); return; }
-    if(idx < flat.length-1){ idx++; speak(true); } else stop();
+    if(my !== token || !playing) return;
+    if(e.error === 'interrupted' || e.error === 'canceled') return;
+    if(e.error === 'not-allowed'){ stop(); showStatus('El teléfono bloqueó el audio. Toca el botón de reproducir otra vez.'); return; }
+    if(idx < flat.length - 1){ idx++; speak(true); } else stop();
   };
-  window._u = u; lastStart = Date.now(); stalledSince = 0;
-  if(!continuando && (synth.speaking || synth.pending)) synth.cancel();
+  window._u = u;
+  lastStart = Date.now();
+  stalledSince = 0;
+  if(synth.paused){ try{ synth.resume(); }catch(e){} }
   synth.speak(u);
 }
+
+// Watchdog no intrusivo: solo rescata la reproducción si se congela de verdad por varios segundos
 setInterval(()=>{
   if(!playing || isAudioDoc() || neural() || !synth) return;
+  if(synth.paused){ try{ synth.resume(); }catch(e){} }
   if(synth.speaking || synth.pending){ stalledSince = 0; return; }
-  if(Date.now()-lastStart < 1500) return;
+  if(Date.now() - lastStart < 4000) return;
   if(!stalledSince){ stalledSince = Date.now(); return; }
-  if(Date.now()-stalledSince > 2500 && document.visibilityState==='visible') speak();
+  if(Date.now() - stalledSince > 5000 && document.visibilityState === 'visible'){
+    stalledSince = 0;
+    try{ synth.cancel(); }catch(e){}
+    setTimeout(()=>{ if(playing && !neural()) speak(); }, 50);
+  }
 }, 1000);
 
 // Voces del sistema: fuera las voces "de broma" de Apple (cantan o suenan a efectos) y las Eloquence, muy robóticas.
@@ -406,12 +442,14 @@ const PREFERIDAS = /^(Mónica|Monica|Paulina|Marisol|Jorge|Juan|Diego|Francisca|
 function score(v, lang){
   let s = 0;
   if(v.lang.toLowerCase().startsWith(lang)) s += 100;
-  if(isGood(v)) s += 30;
+  if(v.default) s += 60;                                       // La voz activa del sistema en iOS/Android arranca sin demora
+  if(/compact/i.test(v.voiceURI)) s += 45;                     // Voces compactas locales: inicio instantáneo (0 ms)
+  if(v.localService) s += 40;                                  // Local en el dispositivo
   if(PREFERIDAS.test(v.name)) s += 25;
   if(lang==='es'){ if(/es[-_]CL/i.test(v.lang)) s += 6; else if(/es[-_](MX|US|419)/i.test(v.lang)) s += 4; }
   if(lang==='en' && /en[-_]US/i.test(v.lang)) s += 4;
-  if(v.localService) s += 40;
-  if(/network|online|cloud/i.test(v.name + ' ' + v.voiceURI)) s -= 30;
+  if(/enhanced|mejorad/i.test(v.name + ' ' + v.voiceURI)) s += 5; // Mejoradas disponibles, pero no prioritarias sobre la instantánea
+  if(/network|online|cloud|siri/i.test(v.name + ' ' + v.voiceURI)) s -= 50; // Evita voces en la nube que demoran varios segundos
   return s;
 }
 function pickVoice(lang){
@@ -744,7 +782,14 @@ async function play(){
     return;
   }
   if(!synth){ showStatus('Este navegador no puede usar las voces del teléfono. Elige la voz Natural.', 'err'); return; }
-  playing = true; setPlayIcon(); holdScreen(true); speak();
+  primeAudio();
+  if(!voices.length || !voiceBy.es){
+    voices = synth.getVoices();
+    voiceBy.es = pickVoice('es'); voiceBy.en = pickVoice('en');
+  }
+  if(synth.paused){ try{ synth.resume(); }catch(e){} }
+  playing = true; setPlayIcon(); holdScreen(true);
+  speak();
 }
 function stop(){
   const was = playing;
@@ -779,7 +824,12 @@ function jump(i){
     }
     return;
   }
-  if(playing) speak(); else { showSentence(true, true); save(); }
+  if(playing){
+    if(synth){
+      try{ synth.cancel(); }catch(e){}
+      setTimeout(()=>{ if(playing && !neural()) speak(); }, 30);
+    } else speak();
+  } else { showSentence(true, true); save(); }
 }
 
 /* ---------- Controles de la pantalla bloqueada ---------- */
