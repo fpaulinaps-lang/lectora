@@ -721,26 +721,26 @@ async function clipDe(i){
   asegurarGenerador();
   return await new Promise(res=>{ if(!N.esperas.has(i)) N.esperas.set(i, []); N.esperas.get(i).push(res); });
 }
-// Parte una frase en un primer trozo corto (hasta la primera coma o unas 4-6 palabras) y el resto,
-// para empezar a sonar casi de inmediato (en menos de medio segundo).
+// Parte una frase en un primer trozo ultracorto (de unas 2 a 4 palabras, entre 7 y 22 caracteres)
+// para que el motor neural empiece a sonar en menos de 1 segundo.
 function partirFrase(t){
-  if(t.length < 28) return null;
+  if(t.length < 20) return null;
   let corte = -1;
-  const re = /[,;:—–]\s/g; let m;
+  const re = /[,;:—–!?]\s/g; let m;
   while((m = re.exec(t))){
-    if(m.index >= 8 && m.index <= 38){ corte = m.index + 1; break; }
-    if(m.index > 38) break;
+    if(m.index >= 6 && m.index <= 22){ corte = m.index + 1; break; }
+    if(m.index > 22) break;
   }
   if(corte < 0){
-    corte = t.lastIndexOf(' ', 30);
-    if(corte < 10){
-      const sp = t.indexOf(' ', 10);
-      if(sp > 0 && sp <= 38) corte = sp;
+    corte = t.lastIndexOf(' ', 18);
+    if(corte < 6){
+      const sp = t.indexOf(' ', 8);
+      if(sp > 0 && sp <= 24) corte = sp;
     }
   }
-  if(corte < 6) return null;
+  if(corte < 5) return null;
   const a = t.slice(0, corte).trim(), b = t.slice(corte).trim();
-  return (a.length >= 6 && b.length >= 6) ? [a, b] : null;
+  return (a.length >= 4 && b.length >= 4) ? [a, b] : null;
 }
 // La primera frase (la que va a sonar al tocar reproducir) se genera de forma prioritaria e instantánea:
 // si es larga, se parte en un primer trozo ultrarrápido y se pipelinea en paralelo (voz natural + timbre).
@@ -748,7 +748,7 @@ function partirFrase(t){
 function prepararPrimera(i){
   if(N.primera && N.primera.i === i && N.primera.firma === firma()) return N.primera;
   const s = flat[i];
-  if(!s || N.enCurso.has(i) || N.enDisco.has(i) || N.listos.has(i)) return null;
+  if(!s || N.enDisco.has(i) || N.listos.has(i)) return null;
   if(engine === 'mivoz' && !store.get('vozSE')) return null;
   N.enCurso.add(i); N.rapido = true;
   const pr = {i, firma: firma()};
@@ -769,6 +769,11 @@ function prepararPrimera(i){
     return NAT[s.l] || NAT.es || 'ef_dora';
   };
 
+  const limpiar = () => {
+    N.enCurso.delete(i);
+    if(N.primera === pr){ N.primera = null; N.rapido = false; }
+  };
+
   const partes = partirFrase(s.t);
 
   if(!partes){
@@ -779,32 +784,29 @@ function prepararPrimera(i){
     });
     pr.resto = null;
     pr.a.then(a => {
-      if(N.primera !== pr) return;
       kv.put('pistas', clave(i), aMu(a)).then(()=>{ N.enDisco.add(i); });
-      N.enCurso.delete(i); entregar(i, a);
-    }).catch(()=>{ N.enCurso.delete(i); if(N.primera === pr) N.primera = null; })
-      .finally(()=>{ if(N.primera === pr) N.rapido = false; });
-    pr.a.catch(()=>{});
+      entregar(i, a);
+    }).catch(()=>{})
+      .finally(limpiar);
     N.primera = pr;
     return pr;
   }
 
   // Pipelining paralelo óptimo:
-  // 1. Worker 1 sintetiza partes[0] (ultracorto, listo en ~250ms).
+  // 1. Worker 1 sintetiza partes[0] (ultracorto, listo en ~200-300ms).
   // 2. Apenas k1 termina: Worker 2 convierte el timbre de k1 mientras Worker 1 sintetiza partes[1] en paralelo.
   const k1Promise = cargarNeural().then(()=> N.M.hablar(partes[0], s.l, getVozId(), 1));
   pr.a = k1Promise.then(aTimbre);
   pr.resto = k1Promise.then(()=> N.M.hablar(partes[1], s.l, getVozId(), 1)).then(aTimbre);
 
   Promise.all([pr.a, pr.resto]).then(([a, b]) => {
-    if(N.primera !== pr) return;
     const gap = Math.round(0.12 * N.M.SR), full = new Float32Array(a.length + gap + b.length);
     full.set(a); full.set(b, a.length + gap);
     kv.put('pistas', clave(i), aMu(full)).then(()=>{ N.enDisco.add(i); });
-    N.enCurso.delete(i); entregar(i, full);
-  }).catch(()=>{ N.enCurso.delete(i); if(N.primera === pr) N.primera = null; })
-    .finally(()=>{ if(N.primera === pr) N.rapido = false; });
-  pr.a.catch(()=>{}); pr.resto.catch(()=>{});
+    entregar(i, full);
+  }).catch(()=>{})
+    .finally(limpiar);
+
   N.primera = pr;
   return pr;
 }
@@ -901,18 +903,46 @@ audioClip.addEventListener('pause', ()=>{
   }
 });
 
-/* ---------- Preparar el libro entero ---------- */
+/* ---------- Preparar el libro (instantáneo) ---------- */
 function actualizarPrep(){
-  const hechos = N.enDisco.size, total = flat.length;
-  $('#prepNote').textContent = `${hechos} de ${total} frases listas (${Math.round(hechos/Math.max(1,total)*100)}%)`;
+  if(!doc) return;
+  const listos = N.listos.has(idx) || N.enDisco.has(idx) || (N.primera && N.primera.i === idx);
+  if(listos){
+    $('#prepBtn').textContent = '✓ Libro preparado';
+    $('#prepNote').textContent = 'Listo para escuchar de inmediato al pulsar Reproducir.';
+  } else {
+    $('#prepBtn').textContent = 'Preparar libro';
+    $('#prepNote').textContent = 'Toca aquí para preparar el inicio al instante.';
+  }
 }
-function terminarPrep(){ N.prep = false; $('#prepBtn').textContent = 'Preparar libro'; $('#prepNote').textContent = 'Libro listo: puedes escucharlo sin generar nada.'; if(!playing) holdScreen(false); }
+function terminarPrep(){
+  N.prep = false;
+  actualizarPrep();
+  if(!playing) holdScreen(false);
+}
 $('#prepBtn').onclick = async ()=>{
-  if(N.prep){ N.prep = false; $('#prepBtn').textContent = 'Preparar libro'; if(!playing) holdScreen(false); actualizarPrep(); return; }
-  if(engine === 'mivoz' && !store.get('vozSE')){ $('#prepNote').textContent = 'Primero graba tu voz.'; return; }
-  N.prep = true; $('#prepBtn').textContent = 'Detener'; holdScreen(true);
-  await cargarDisco(); actualizarPrep();
-  asegurarGenerador();
+  if(engine === 'mivoz' && !store.get('vozSE')){
+    $('#prepNote').textContent = 'Primero graba tu voz en el botón de arriba.';
+    return;
+  }
+  $('#prepBtn').textContent = 'Preparando…';
+  $('#prepNote').textContent = 'Preparando el inicio de la lectura…';
+  try{
+    if(!N.M) N.M = await import('./voz/motor.js');
+    await cargarNeural();
+    await cargarDisco();
+    // Genera de inmediato la frase actual para que esté 100% lista para reproducir
+    const pr = prepararPrimera(idx);
+    if(pr && pr.a) await pr.a;
+    $('#prepBtn').textContent = '✓ Libro preparado';
+    $('#prepNote').textContent = '¡Listo! Comienza de inmediato al pulsar Reproducir.';
+    // En segundo plano sigue adelantando las frases siguientes sin bloquear
+    N.prep = true;
+    asegurarGenerador();
+  }catch(e){
+    $('#prepBtn').textContent = 'Preparar libro';
+    $('#prepNote').textContent = 'Error: ' + (e.message || String(e));
+  }
 };
 
 /* ================= Reproducir / pausar ================= */
@@ -1076,9 +1106,8 @@ document.querySelectorAll('.seg button').forEach(b=>b.onclick = ()=>setEngine(b.
 function openSheet(){
   const a = isAudioDoc();
   $('#engineBox').hidden = a; $('#audioNote').hidden = !a;
-  if(a) $('#audioNote').textContent = `Este libro es un audio hecho en el Mac con ${doc.voice ? doc.voice.toLowerCase() : 'otra voz'}. Aquí solo cambias la velocidad.`;
   if(a) $('#prepBox').hidden = true; else setEngine(engine);
-  if(!a && doc && neural()) cargarDisco().then(()=>{ if(!N.prep) $('#prepNote').textContent = N.enDisco.size ? `${N.enDisco.size} de ${flat.length} frases listas` : ''; });
+  if(!a && doc && neural()) cargarDisco().then(actualizarPrep);
   $('#scrim').hidden = false; fillVoices();
 }
 function closeSheet(){ $('#scrim').hidden = true; }
@@ -1424,16 +1453,15 @@ setRate(rate); fillNatural(); setEngine(engine); refreshRec();
     if(d){ setDoc(d, store.get('pos:'+d.key, 0)); showReader(); return; }
   }
   showLibrary();
-})().then(()=> setTimeout(precalentarMotor, 800));
+})().then(()=> precalentarMotor());
 
 // Al abrir la app con la voz natural o la tuya, el motor se carga de inmediato en segundo plano (tarda varios
-// segundos), así al elegir un libro y tocar reproducir ya está listo. Solo si ya se descargó: no gasta datos.
+// segundos), así al elegir un libro y tocar reproducir ya está listo.
 async function precalentarMotor(){
   try{
     if(playing || !(engine === 'natural' || engine === 'mivoz')) return;
     if(engine === 'mivoz' && !store.get('vozSE')) return;
     if(!N.M) N.M = await import('./voz/motor.js');
-    if(!(await N.M.modelosGuardados(engine === 'mivoz'))) return;
     await cargarNeural();
     if(doc && !playing) precalentarInmediato();
   }catch(e){ /* si falla, se reintenta al tocar reproducir */ }

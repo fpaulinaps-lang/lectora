@@ -28,7 +28,7 @@ export async function modelosGuardados(conConversor){
   try{
     const c = await caches.open(CACHE);
     const urls = [modeloKokoro(), HF + 'tokenizer.json'];
-    if(conConversor){ const base = new URL('./', import.meta.url).href; for(const p of ['conv_a', 'conv_b', 'conv_c']) urls.push(base + p + '.onnx', base + p + '.f16'); urls.push(base + 'huella.onnx'); }
+    if(conConversor){ const base = new URL('./', import.meta.url).href; for(const p of ['conv_a', 'conv_b', 'conv_c']) urls.push(base + p + '.onnx', base + p + '.f16'); }
     for(const u of urls) if(!(await c.match(u))) return false;
     return true;
   }catch(e){ return false; }
@@ -233,7 +233,6 @@ export function prepararConversor(alAvanzar = ()=>{}){
     const partes = {a: copia(a), aPesos: expandir(aP), b: copia(b), bPesos: expandir(bP), c: copia(c), cPesos: expandir(cP)};
     await pr.conv.llamar('cargarConversor', partes);
     pr.conv.conversor = true;
-    await prepararHuella();
   })();
   convListo.catch(()=>{ convListo = null; });
   return convListo;
