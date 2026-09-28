@@ -1,17 +1,39 @@
 {
-  "name": "Lectora de PDFs",
-  "short_name": "Lectora",
-  "description": "Lee tus PDFs en voz alta con las voces del teléfono, sin límites.",
+  "name": "Lectora Libre y Gratis",
+  "short_name": "Lectora Libre y Gratis",
+  "description": "Lee tus PDFs y EPUBs en voz alta, gratis y sin límites.",
   "lang": "es",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#EEF1EF",
-  "theme_color": "#0E6B63",
+  "background_color": "#FFF7E0",
+  "theme_color": "#C8102E",
   "icons": [
-    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
-    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
-    {"src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ],
-  "file_handlers": [{"action": "./", "accept": {"application/pdf": [".pdf"]}}]
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/pdf": [
+          ".pdf"
+        ]
+      }
+    }
+  ]
 }

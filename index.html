@@ -3,39 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0E6B63">
+<meta name="theme-color" content="#C8102E">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Lectora">
+<meta name="apple-mobile-web-app-title" content="Lectora Libre y Gratis">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<title>Lectora</title>
+<title>Lectora Libre y Gratis</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap">
 <style>
 :root{
-  --bg:#EEF1EF; --paper:#FAFBFA; --ink:#1B2321; --muted:#5D6A66; --line:#D5DCD9;
-  --accent:#0E6B63; --accent-ink:#FFFFFF; --accent-soft:#D7E9E5;
-  --mark:rgba(240,190,60,.40); --err:#A33A2B; --rec:#C0392B;
+  --bg:#FFF7E0; --paper:#FFFDF6; --ink:#2B1512; --muted:#7A5A4E; --line:#F1DDA8;
+  --accent:#C8102E; --accent-ink:#FFFFFF; --accent-soft:#FFE9A3; --yellow:#FFC72C;
+  --mark:rgba(255,199,44,.55); --err:#9E1B1B;
   --ui:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
   --read:"Literata",Georgia,"Times New Roman",serif;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     color-scheme:dark;
-    --bg:#101514; --paper:#171D1C; --ink:#E2E8E5; --muted:#93A29D; --line:#2A3331;
-    --accent:#4CC0B2; --accent-ink:#06201D; --accent-soft:#1D3431;
-    --mark:rgba(235,185,60,.24); --err:#E88A7A; --rec:#F07060;
+    --bg:#1B100E; --paper:#251715; --ink:#F7EADF; --muted:#C9A697; --line:#4A2C25;
+    --accent:#FF5A4F; --accent-ink:#2A0705; --accent-soft:#473410; --yellow:#FFC72C;
+    --mark:rgba(255,199,44,.30); --err:#FF8F85;
   }
 }
 :root[data-theme="dark"]{
   color-scheme:dark;
-  --bg:#101514; --paper:#171D1C; --ink:#E2E8E5; --muted:#93A29D; --line:#2A3331;
-  --accent:#4CC0B2; --accent-ink:#06201D; --accent-soft:#1D3431;
-  --mark:rgba(235,185,60,.24); --err:#E88A7A; --rec:#F07060;
+  --bg:#1B100E; --paper:#251715; --ink:#F7EADF; --muted:#C9A697; --line:#4A2C25;
+  --accent:#FF5A4F; --accent-ink:#2A0705; --accent-soft:#473410; --yellow:#FFC72C;
+  --mark:rgba(255,199,44,.30); --err:#FF8F85;
 }
 *{box-sizing:border-box}
 html,body{margin:0}
@@ -48,13 +48,13 @@ button{cursor:pointer}
 
 .top{position:sticky; top:0; padding-top:env(safe-area-inset-top,0px); z-index:5; background:var(--bg); border-bottom:1px solid var(--line)}
 .top-in{max-width:44rem; margin:0 auto; padding:10px 16px; display:flex; align-items:center; gap:12px}
-.brand{font-family:var(--read); font-weight:600; font-size:1.25rem; letter-spacing:.01em; flex:1}
+.brand{font-family:var(--read); font-weight:600; font-size:1.25rem; letter-spacing:.01em; flex:1; color:var(--accent)}
+.brand span{font-family:var(--ui); font-size:.8rem; font-weight:700; color:var(--ink); background:var(--yellow); border-radius:4px; padding:1px 6px; margin-left:4px; vertical-align:3px; white-space:nowrap}
 .back{background:none; border:0; color:var(--accent); font-weight:700; padding:6px 0; white-space:nowrap}
 .doc-name{flex:1; min-width:0; color:var(--muted); font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .btn{display:inline-flex; align-items:center; justify-content:center; gap:6px; border:0; border-radius:999px; padding:9px 16px;
   background:var(--accent); color:var(--accent-ink); font-weight:700; font-size:.95rem; white-space:nowrap}
 .btn.ghost{background:transparent; color:var(--ink); border:1px solid var(--line)}
-.btn.rec{background:var(--rec); color:#fff}
 .btn:disabled{opacity:.5}
 .sr{position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0 0 0 0)}
 
@@ -77,7 +77,9 @@ body.leyendo main{padding-block:14px 190px}
 .book.cont{border-color:var(--accent)}
 .spine{width:44px; height:58px; border-radius:3px 6px 6px 3px; background:var(--accent); color:var(--accent-ink); display:grid; place-items:center;
   font-family:var(--read); font-weight:600; font-size:1.2rem; box-shadow:inset 4px 0 0 rgba(0,0,0,.18)}
-.book[data-kind="audio"] .spine{background:#6B4E9B; color:#fff}
+.spine.con-portada{background:none; box-shadow:0 1px 3px rgba(0,0,0,.25); overflow:hidden}
+.spine .portada{width:100%; height:100%; object-fit:cover; display:block}
+.book[data-kind="audio"] .spine{background:var(--yellow); color:#2B1512}
 .book[data-kind="ejemplo"] .spine{background:var(--line); color:var(--muted)}
 .book-open{background:none; border:0; text-align:left; padding:0; min-width:0; display:flex; flex-direction:column; gap:3px}
 .book-title{font-family:var(--read); font-weight:600; font-size:1.05rem; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
@@ -112,8 +114,6 @@ body.leyendo main{padding-block:14px 190px}
 .ic svg{width:22px; height:22px; fill:currentColor}
 .play{width:64px; height:64px; border:0; background:var(--accent); color:var(--accent-ink)}
 .play svg{width:28px; height:28px}
-.play.wait svg{animation:pulse 1.2s ease-in-out infinite}
-@keyframes pulse{50%{opacity:.35}}
 .side{justify-self:start; border:1px solid var(--line); background:transparent; border-radius:999px; padding:8px 12px; font-size:.85rem; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .side.r{justify-self:end; font-variant-numeric:tabular-nums}
 
@@ -126,10 +126,6 @@ body.leyendo main{padding-block:14px 190px}
 .sheet{width:100%; max-width:44rem; max-height:90%; overflow-y:auto; background:var(--paper); border-radius:18px 18px 0 0;
   padding:18px 16px calc(20px + env(safe-area-inset-bottom,0px)); display:flex; flex-direction:column; gap:16px}
 .sheet h2{font-family:var(--read); font-size:1.25rem; margin:0; display:flex; justify-content:space-between; align-items:center}
-.seg{display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden}
-.seg button{border:0; background:transparent; padding:10px 6px; font-size:.9rem; font-weight:700; color:var(--muted); border-left:1px solid var(--line)}
-.seg button:first-child{border-left:0}
-.seg button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
 .panel{display:flex; flex-direction:column; gap:12px}
 .field{display:flex; flex-direction:column; gap:6px}
 .field label,.lbl{font-size:.75rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:700}
@@ -140,19 +136,16 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
 .check input{accent-color:var(--accent); width:18px; height:18px}
 .hint{color:var(--muted); font-size:.85rem; margin:0}
 .note{background:var(--accent-soft); border-radius:10px; padding:10px 12px; font-size:.92rem; margin:0}
-.script{font-family:var(--read); font-size:1.05rem; line-height:1.6; background:var(--bg); border-radius:10px; padding:12px 14px; margin:0}
-.meter{height:10px; border-radius:5px; background:var(--line); overflow:hidden}
-.meter i{display:block; height:100%; width:0; background:var(--rec); transition:width .08s}
 .tips{border-top:1px solid var(--line); padding-top:14px; font-size:.92rem; display:flex; flex-direction:column; gap:10px}
 .tips p{margin:0}
-@media (prefers-reduced-motion: reduce){ .bar i,.s,.prog i{transition:none} .play.wait svg{animation:none} }
+@media (prefers-reduced-motion: reduce){ .bar i,.s,.prog i{transition:none} }
 </style>
 </head>
 <body>
 
 <header class="top"><div class="top-in">
   <button class="back" id="backBtn" hidden>‹ Biblioteca</button>
-  <div class="brand" id="brand">Lectora</div>
+  <div class="brand" id="brand">Lectora <span>Libre y Gratis</span></div>
   <div class="doc-name" id="docName" hidden></div>
   <label class="btn" for="file" id="addBtn">+ Agregar</label>
   <input class="sr" type="file" id="file" multiple accept="application/pdf,.pdf,application/epub+zip,.epub,application/zip,.zip">
@@ -204,53 +197,15 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
     <p class="note" id="audioNote" hidden></p>
 
     <div id="engineBox" class="panel">
-      <div class="seg" role="group" aria-label="Tipo de voz">
-        <button data-engine="sistema" aria-pressed="false">Teléfono</button>
-        <button data-engine="natural" aria-pressed="false">Natural</button>
-        <button data-engine="mivoz" aria-pressed="false">Mi voz</button>
-      </div>
-
-      <div class="panel" data-panel="sistema">
-        <p class="hint">Las voces que trae tu teléfono. Gastan poco, pero suenan más robóticas y necesitan la pantalla encendida.</p>
+      <div class="panel">
+        <p class="hint">La Lectora usa las voces que trae tu teléfono: sin internet y sin límites.</p>
         <div class="field"><label for="voiceEs">Voz en español</label><select id="voiceEs"></select></div>
         <div class="field"><label for="voiceEn">Voz en inglés</label><select id="voiceEn"></select></div>
         <label class="check"><input type="checkbox" id="allLangs"> Mostrar voces de todos los idiomas</label>
         <p class="hint" id="voiceNote"></p>
       </div>
 
-      <div class="panel" data-panel="natural">
-        <p class="hint">Voces naturales que el propio teléfono genera, sin internet ni límites. Puedes bloquear la pantalla mientras escuchas.</p>
-        <div class="field"><label for="natEs">Voz en español</label><select id="natEs"></select></div>
-        <div class="field"><label for="natEn">Voz en inglés</label><select id="natEn"></select></div>
-      </div>
-
-      <div class="panel" data-panel="mivoz">
-        <div id="recEmpty" class="panel">
-          <p class="hint">Graba 25 segundos leyendo este texto en voz alta, con tu tono normal y en un lugar sin ruido. Con eso la Lectora le pone tu timbre a la voz natural.</p>
-          <p class="script">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención. Por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden. Hoy voy a leer algunos documentos importantes, página por página, hasta terminarlos.</p>
-        </div>
-        <p class="note" id="recDone" hidden>Tu voz está lista. Se parece a ti en el tono; no copia tu acento ni tu manera de hablar.</p>
-        <div id="recLive" class="panel" hidden>
-          <div class="meter"><i id="recLevel"></i></div>
-          <p class="hint" id="recTime">Grabando… 25 s</p>
-        </div>
-        <div class="row">
-          <button class="btn rec" id="recBtn">● Grabar mi voz</button>
-          <button class="btn ghost" id="recPlay" hidden>Escuchar grabación</button>
-        </div>
-        <div class="field" id="baseGenderField" style="margin-top:12px">
-          <label for="baseGender">Tono de voz base</label>
-          <select id="baseGender">
-            <option value="auto">Automático (según tu tono de voz)</option>
-            <option value="mujer">Femenina (Dora / Heart)</option>
-            <option value="hombre">Masculina (Álex / Michael)</option>
-          </select>
-          <p class="hint" id="baseGenderHint" style="margin-top:4px"></p>
-        </div>
-      </div>
-
-      <div class="row"><button class="btn ghost" id="test">Probar esta voz</button><span class="hint" id="testNote"></span></div>
-      <p class="hint" id="dlNote"></p>
+      <div class="row"><button class="btn ghost" id="test">Probar las voces</button><span class="hint" id="testNote"></span></div>
     </div>
 
     <div class="field">
@@ -258,17 +213,13 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       <div class="row"><input type="range" id="rate" min="0.6" max="2.2" step="0.05" value="1"><b id="rateVal" style="font-variant-numeric:tabular-nums;min-width:3.5em;text-align:right">1,0×</b></div>
     </div>
 
-    <div class="panel" id="prepBox" hidden>
-      <span class="lbl">Preparar el libro</span>
-      <p class="hint">Genera de una vez la voz de todo el libro, idealmente con el teléfono cargando y esta pantalla abierta. Después, escucharlo casi no gasta batería.</p>
-      <div class="row"><button class="btn ghost" id="prepBtn">Preparar libro</button><span class="hint" id="prepNote"></span></div>
-    </div>
-
     <div class="tips">
+      <span class="lbl">Para que suene natural</span>
+      <p><b>iPhone:</b> en <b>Ajustes › Accesibilidad › Contenido leído › Voces</b>, entra a Español (y a Inglés si lees en inglés) y descarga una voz que diga <b>Premium</b> o <b>Mejorada</b>. La Lectora la elige sola.</p>
+      <p><b>Android:</b> en <b>Ajustes › Sistema › Idiomas › Salida de texto a voz</b>, elige Google e instala el español.</p>
       <span class="lbl">Batería</span>
-      <p><b>Teléfono:</b> la voz que menos procesa, pero la pantalla tiene que quedar encendida. Usa <b>Pantalla negra</b>.</p>
-      <p><b>Natural y Mi voz:</b> el teléfono genera la voz mientras escuchas y eso gasta más, pero puedes bloquear la pantalla. Lo más económico es preparar el libro mientras carga.</p>
-      <p>Los audios del <b>Estudio Lectora</b> del Mac también se abren aquí con «+ Agregar».</p>
+      <p>Con la pantalla encendida gasta más: usa <b>Pantalla negra</b> mientras escuchas.</p>
+    </div>
     </div>
   </div>
 </div>

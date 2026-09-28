@@ -1,12 +1,8 @@
-// Guarda la app en el teléfono para que abra sin internet, y la aísla (COOP/COEP)
-// para que la voz pueda usar varios núcleos del procesador.
-const CACHE = 'lectora-v19';                // la app: se renueva con cada versión
-const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo (motor de voz, etc.): sobrevive a las versiones
+// Guarda la app en el teléfono para que abra sin internet.
+const CACHE = 'lectora-v20';                // la app: se renueva con cada versión
+const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo: sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
-  'voz/motor.js', 'voz/es-fonemas.js', 'voz/nucleo.js', 'voz/voz-worker.js', 'voz/voz-worker-cpu.js', 'voz/huellas-base.json', 'vendor/phonemizer.js',
-  'vendor/ort/ort.wasm.min.mjs', 'vendor/ort/ort.webgpu.min.mjs',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
-// Los modelos de voz los guarda el propio motor (voz/motor.js, caché lectora-modelos-v1); aquí no se duplican.
 const GRANDES = /\.(onnx|f16|bin)$/;
 const ESPERA_RED = 4000;                    // con mala señal, no esperar más que esto antes de usar la copia guardada
 
@@ -25,17 +21,15 @@ self.addEventListener('install', e => {
   }))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  // Solo se borran las versiones viejas de la app; el motor de voz y los modelos se conservan.
-  // (Las versiones anteriores guardaban el motor junto con la app: se rescata antes de borrar.)
+  // Se borran las versiones viejas de la app y los archivos de las voces que se quitaron
+  // (motor de voz natural y «Mi voz»: unos 35 MB guardados al usarlas).
   e.waitUntil((async () => {
-    const extra = await caches.open(EXTRA);
     for (const k of await caches.keys()) {
-      if (!/^lectora-v\d+$/.test(k) || k === CACHE) continue;
-      const vieja = await caches.open(k);
-      for (const req of await vieja.keys()) {
-        if (/\/vendor\/ort\//.test(req.url) && !(await extra.match(req))) { const r = await vieja.match(req); if (r) await extra.put(req, r); }
-      }
-      await caches.delete(k);
+      if (/^lectora-v\d+$/.test(k) && k !== CACHE) await caches.delete(k);
+    }
+    const extra = await caches.open(EXTRA);
+    for (const req of await extra.keys()) {
+      if (/\/(voz|vendor\/ort)\/|phonemizer/.test(req.url)) await extra.delete(req);
     }
     await self.clients.claim();
   })());
