@@ -1,9 +1,9 @@
 // Guarda la app en el teléfono para que abra sin internet, y la aísla (COOP/COEP)
 // para que la voz pueda usar varios núcleos del procesador.
-const CACHE = 'lectora-v14';                // la app: se renueva con cada versión
+const CACHE = 'lectora-v15';                // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo (motor de voz, etc.): sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
-  'voz/motor.js', 'voz/es-fonemas.js', 'voz/nucleo.js', 'voz/voz-worker.js', 'voz/voz-worker-cpu.js', 'vendor/phonemizer.js',
+  'voz/motor.js', 'voz/es-fonemas.js', 'voz/nucleo.js', 'voz/voz-worker.js', 'voz/voz-worker-cpu.js', 'voz/huellas-base.json', 'vendor/phonemizer.js',
   'vendor/ort/ort.wasm.min.mjs', 'vendor/ort/ort.webgpu.min.mjs',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 // Los modelos de voz los guarda el propio motor (voz/motor.js, caché lectora-modelos-v1); aquí no se duplican.

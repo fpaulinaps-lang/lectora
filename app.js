@@ -569,8 +569,6 @@ async function cargarNeural(){
   }
   hideStatus();
 }
-const FRASE_BASE = {es:'La lectura en voz alta tiene su propio ritmo.',
-                    en:'Reading aloud gives every word its own rhythm.'};
 async function prepararMiVoz(){
   const h = store.get('vozSE', null);
   if(!h) throw new Error('Primero graba tu voz en el botón Voz › Mi voz.');
@@ -581,24 +579,28 @@ async function prepararMiVoz(){
     return;
   }
   // Elige la voz natural cuyo timbre se parece más al tuyo: la conversión queda más limpia.
-  showStatus('Ajustando la voz a tu timbre…');
+  // Las huellas de las voces naturales vienen calculadas de antemano (voz/huellas-base.json), así que esto
+  // es solo comparar números: antes generaba frases de prueba con cada voz y tardaba medio minuto sin GPU.
+  const huellas = await huellasBase();
   const base = {};
-  const candidatos = {
-    es: N.M.VOCES.es,
-    en: N.M.VOCES.en.filter(v => v.id === 'af_heart' || v.id === 'am_michael')
-  };
   for(const lang of ['es','en']){
     let mejor = null;
-    for(const v of candidatos[lang]){
-      const se = await N.M.huellaDe(await N.M.hablar(FRASE_BASE[lang], lang, v.id), N.M.SR);
+    for(const v of VOCES_BASE[lang]){
+      const se = Float32Array.from(huellas[v]);
       const sim = N.M.parecido(se, N.tgt);
-      if(!mejor || sim > mejor.sim) mejor = {id:v.id, se, sim};
+      if(!mejor || sim > mejor.sim) mejor = {id:v, se, sim};
     }
     base[lang] = mejor;
   }
   N.base = base;
   store.set('vozBase', {hash:store.get('vozHash'), es:{id:base.es.id, se:Array.from(base.es.se)}, en:{id:base.en.id, se:Array.from(base.en.se)}});
-  hideStatus();
+}
+const VOCES_BASE = {es: ['ef_dora', 'em_alex'], en: ['af_heart', 'af_bella', 'am_michael', 'am_fenrir']};
+let huellasP = null;
+function huellasBase(){
+  if(!huellasP) huellasP = fetch('voz/huellas-base.json').then(r => { if(!r.ok) throw new Error('No pude cargar las voces base.'); return r.json(); });
+  huellasP.catch(()=>{ huellasP = null; });
+  return huellasP;
 }
 
 // Qué frases de este libro (con esta voz) ya están generadas y guardadas.
@@ -1091,11 +1093,9 @@ $('#recBtn').onclick = async ()=>{
       store.set('vozSE', Array.from(se));
       store.set('vozHash', Date.now().toString(36));
       store.del('vozBase');
-      showStatus('Ajustando la voz a tu timbre…');
-      await N.M.prepararVoz(progreso);
-      await N.M.prepararConversor(progreso);
-      await prepararMiVoz();
+      await prepararMiVoz();          // instantáneo: compara tu huella con las de las voces naturales
       hideStatus();
+      precalentarMotor();             // el motor se carga en segundo plano, sin hacerte esperar
       if(engine === 'mivoz' && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentar(); }
     }catch(e){ showStatus(e.message || 'No pude procesar la grabación. Intenta otra vez.', 'err'); }
     finally{ ctx.close(); $('#recBtn').disabled = false; refreshRec(); }
