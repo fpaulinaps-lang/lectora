@@ -265,7 +265,7 @@ function setDoc(d, pos){
   updateVoiceBtn();
   renderPage(flat.length ? flat[idx].p : 0);
   updateMeta(); mediaMeta();
-  precalentar();
+  if(neural()) precalentarInmediato(); else precalentar();
 }
 
 function renderPage(p){
@@ -552,22 +552,29 @@ async function hayGPU(){
   if(store.get('sinGPU', false)) return false;
   try{ return !!(navigator.gpu && await navigator.gpu.requestAdapter()); }catch(e){ return false; }
 }
-async function cargarNeural(){
-  if(!N.M) N.M = await import('./voz/motor.js');
-  if(!N.configurado){
-    N.configurado = true;
-    let gpu = false;
-    gpu = await hayGPU();
-    N.M.configurar({gpu});
-  }
-  await N.M.prepararVoz(progreso);
-  if(engine === 'natural') await N.M.vozEnParalelo();
-  if(engine === 'mivoz'){
-    N.M.vozEnParalelo(true).catch(()=>{});   // sin GPU: otro proceso más para la voz natural, sin esperarlo
-    await N.M.prepararConversor(progreso);
-    await prepararMiVoz();
-  }
-  hideStatus();
+let neuralP = null, neuralEngine = null;
+function cargarNeural(){
+  if(neuralP && neuralEngine === engine) return neuralP;
+  neuralEngine = engine;
+  neuralP = (async ()=>{
+    if(!N.M) N.M = await import('./voz/motor.js');
+    if(!N.configurado){
+      N.configurado = true;
+      let gpu = false;
+      gpu = await hayGPU();
+      N.M.configurar({gpu});
+    }
+    await N.M.prepararVoz(progreso);
+    if(engine === 'natural') await N.M.vozEnParalelo();
+    if(engine === 'mivoz' && store.get('vozSE')){
+      N.M.vozEnParalelo(true).catch(()=>{});   // sin GPU: otro proceso más para la voz natural, sin esperarlo
+      await N.M.prepararConversor(progreso);
+      await prepararMiVoz();
+    }
+    hideStatus();
+  })();
+  neuralP.catch(()=>{ neuralP = null; });
+  return neuralP;
 }
 async function prepararMiVoz(){
   const h = store.get('vozSE', null);
@@ -714,33 +721,81 @@ async function clipDe(i){
   asegurarGenerador();
   return await new Promise(res=>{ if(!N.esperas.has(i)) N.esperas.set(i, []); N.esperas.get(i).push(res); });
 }
-// Parte una frase en un primer trozo corto (hasta la primera coma, o unas 6-8 palabras) y el resto,
-// para poder empezar a hablar mucho antes.
+// Parte una frase en un primer trozo corto (hasta la primera coma o unas 4-6 palabras) y el resto,
+// para empezar a sonar casi de inmediato (en menos de medio segundo).
 function partirFrase(t){
-  if(t.length < 50) return null;
+  if(t.length < 28) return null;
   let corte = -1;
-  const re = /[,;:]\s/g; let m;
-  while((m = re.exec(t))){ if(m.index >= 12 && m.index <= 60){ corte = m.index + 1; break; } if(m.index > 60) break; }
-  if(corte < 0){ corte = t.lastIndexOf(' ', 42); if(corte < 20) return null; }
+  const re = /[,;:—–]\s/g; let m;
+  while((m = re.exec(t))){
+    if(m.index >= 8 && m.index <= 38){ corte = m.index + 1; break; }
+    if(m.index > 38) break;
+  }
+  if(corte < 0){
+    corte = t.lastIndexOf(' ', 30);
+    if(corte < 10){
+      const sp = t.indexOf(' ', 10);
+      if(sp > 0 && sp <= 38) corte = sp;
+    }
+  }
+  if(corte < 6) return null;
   const a = t.slice(0, corte).trim(), b = t.slice(corte).trim();
-  return b.length >= 10 ? [a, b] : null;
+  return (a.length >= 6 && b.length >= 6) ? [a, b] : null;
 }
-// La primera frase (la que va a sonar al tocar reproducir) se genera en dos trozos, pedidos de una vez.
-// Se usa al abrir un libro (precalentar) y al tocar reproducir si la frase no estaba lista.
+// La primera frase (la que va a sonar al tocar reproducir) se genera de forma prioritaria e instantánea:
+// si es larga, se parte en un primer trozo ultrarrápido y se pipelinea en paralelo (voz natural + timbre).
+// Si es corta, se sintetiza y convierte directamente en una sola llamada sin demoras.
 function prepararPrimera(i){
   if(N.primera && N.primera.i === i && N.primera.firma === firma()) return N.primera;
-  const s = flat[i], partes = partirFrase(s.t);
-  if(!partes || N.enCurso.has(i) || N.enDisco.has(i) || N.listos.has(i)) return null;
+  const s = flat[i];
+  if(!s || N.enCurso.has(i) || N.enDisco.has(i) || N.listos.has(i)) return null;
   if(engine === 'mivoz' && !store.get('vozSE')) return null;
   N.enCurso.add(i); N.rapido = true;
   const pr = {i, firma: firma()};
-  const aTimbre = async x => { x = N.M.recortar(x); return engine === 'mivoz' ? await N.M.convertir(x, N.base[s.l].se, N.tgt) : x; };
-  const pedidos = cargarNeural().then(()=>{
-    const vozId = engine === 'mivoz' ? N.base[s.l].id : NAT[s.l];
-    return {k1: N.M.hablar(partes[0], s.l, vozId, 1), k2: N.M.hablar(partes[1], s.l, vozId, 1)};
-  });
-  pr.a = pedidos.then(p => p.k1).then(aTimbre);
-  pr.resto = pedidos.then(p => p.k2).then(aTimbre);
+
+  const aTimbre = async x => {
+    x = N.M.recortar(x);
+    if(engine !== 'mivoz') return x;
+    const baseObj = (N.base && (N.base[s.l] || N.base.es)) || null;
+    const baseSe = baseObj ? baseObj.se : null;
+    return (baseSe && N.tgt) ? await N.M.convertir(x, baseSe, N.tgt) : x;
+  };
+
+  const getVozId = () => {
+    if(engine === 'mivoz'){
+      const baseObj = (N.base && (N.base[s.l] || N.base.es)) || null;
+      return baseObj ? baseObj.id : (NAT[s.l] || 'ef_dora');
+    }
+    return NAT[s.l] || NAT.es || 'ef_dora';
+  };
+
+  const partes = partirFrase(s.t);
+
+  if(!partes){
+    // Frase corta: generar y convertir directo en una sola etapa de alta prioridad
+    pr.a = cargarNeural().then(async ()=>{
+      const crudo = await N.M.hablar(s.t, s.l, getVozId(), 1);
+      return await aTimbre(crudo);
+    });
+    pr.resto = null;
+    pr.a.then(a => {
+      if(N.primera !== pr) return;
+      kv.put('pistas', clave(i), aMu(a)).then(()=>{ N.enDisco.add(i); });
+      N.enCurso.delete(i); entregar(i, a);
+    }).catch(()=>{ N.enCurso.delete(i); if(N.primera === pr) N.primera = null; })
+      .finally(()=>{ if(N.primera === pr) N.rapido = false; });
+    pr.a.catch(()=>{});
+    N.primera = pr;
+    return pr;
+  }
+
+  // Pipelining paralelo óptimo:
+  // 1. Worker 1 sintetiza partes[0] (ultracorto, listo en ~250ms).
+  // 2. Apenas k1 termina: Worker 2 convierte el timbre de k1 mientras Worker 1 sintetiza partes[1] en paralelo.
+  const k1Promise = cargarNeural().then(()=> N.M.hablar(partes[0], s.l, getVozId(), 1));
+  pr.a = k1Promise.then(aTimbre);
+  pr.resto = k1Promise.then(()=> N.M.hablar(partes[1], s.l, getVozId(), 1)).then(aTimbre);
+
   Promise.all([pr.a, pr.resto]).then(([a, b]) => {
     if(N.primera !== pr) return;
     const gap = Math.round(0.12 * N.M.SR), full = new Float32Array(a.length + gap + b.length);
@@ -780,7 +835,11 @@ async function reproducirClip(i){
       a = N.listos.get(i);
       if(!a && !N.enDisco.has(i)){
         const pr = prepararPrimera(i);
-        if(pr){ a = await pr.a; primerTrozo = true; N.resto = {i, my, promesa: pr.resto}; }
+        if(pr){
+          a = await pr.a;
+          primerTrozo = !!pr.resto;
+          N.resto = pr.resto ? {i, my, promesa: pr.resto} : null;
+        }
       }
     }catch(e){ a = null; }
     if(!a) a = await clipDe(i);
@@ -796,23 +855,30 @@ async function reproducirClip(i){
   }
 }
 let precalTimer = null;
-function precalentar(){
+async function precalentarInmediato(){
   clearTimeout(precalTimer);
   if(!doc || !flat.length || playing || N.prep || !neural() || isAudioDoc()) return;
   if(engine === 'mivoz' && !store.get('vozSE')) return;
-  precalTimer = setTimeout(async ()=>{
-    if(playing || N.prep || !neural() || isAudioDoc()) return;
-    if(engine === 'mivoz' && !store.get('vozSE')) return;
+  try{
+    if(!N.M) N.M = await import('./voz/motor.js');
+    cargarNeural().catch(()=>{});
     await cargarDisco();
+    if(playing || N.prep || !neural() || isAudioDoc()) return;
     const falta = j => !N.listos.has(j) && !N.enDisco.has(j);
     const fin = Math.min(flat.length, idx + 2);
     let hayFalta = false;
     for(let j = idx; j < fin; j++){ if(falta(j)){ hayFalta = true; break; } }
     if(!hayFalta) return;
-    try{ if(!N.M) N.M = await import('./voz/motor.js'); prepararPrimera(idx); }catch(e){}
+    prepararPrimera(idx);
     N.precalentando = true;
     asegurarGenerador();
-  }, 350);
+  }catch(e){}
+}
+function precalentar(){
+  clearTimeout(precalTimer);
+  if(!doc || !flat.length || playing || N.prep || !neural() || isAudioDoc()) return;
+  if(engine === 'mivoz' && !store.get('vozSE')) return;
+  precalTimer = setTimeout(precalentarInmediato, 350);
 }
 audioClip.addEventListener('ended', async ()=>{
   if(N.priming) return;
@@ -909,7 +975,7 @@ function jump(i){
       reproducirClip(idx);
     } else {
       showSentence(true, true); save();
-      precalentar();
+      precalentarInmediato();
     }
     return;
   }
@@ -989,7 +1055,21 @@ function setEngine(e){
   $('#dlNote').textContent = e === 'sistema' ? '' :
     `La primera vez descarga la voz (unos ${tam + (e==='mivoz' ? 70 : 0)} MB; conviene Wi-Fi). Después funciona sin internet.` + notaMotor();
   updateVoiceBtn(); refreshRec();
-  if(antes !== e && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentar(); }
+  if(antes !== e && doc){
+    const era = playing;
+    stop();
+    N.reset();
+    if(era) play();
+    else if(neural()) precalentarInmediato();
+    else precalentar();
+  } else if((e === 'mivoz' || e === 'natural') && doc && !playing){
+    precalentarInmediato();
+  }
+  if(e === 'mivoz' && store.get('vozSE')){
+    cargarNeural().catch(()=>{});
+  } else if(e === 'natural'){
+    cargarNeural().catch(()=>{});
+  }
 }
 document.querySelectorAll('.seg button').forEach(b=>b.onclick = ()=>setEngine(b.dataset.engine));
 
@@ -1093,10 +1173,11 @@ $('#recBtn').onclick = async ()=>{
       store.set('vozSE', Array.from(se));
       store.set('vozHash', Date.now().toString(36));
       store.del('vozBase');
+      neuralP = null;
       await prepararMiVoz();          // instantáneo: compara tu huella con las de las voces naturales
       hideStatus();
       precalentarMotor();             // el motor se carga en segundo plano, sin hacerte esperar
-      if(engine === 'mivoz' && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentar(); }
+      if(engine === 'mivoz' && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentarInmediato(); }
     }catch(e){ showStatus(e.message || 'No pude procesar la grabación. Intenta otra vez.', 'err'); }
     finally{ ctx.close(); $('#recBtn').disabled = false; refreshRec(); }
   };
@@ -1352,16 +1433,9 @@ async function precalentarMotor(){
     if(playing || !(engine === 'natural' || engine === 'mivoz')) return;
     if(engine === 'mivoz' && !store.get('vozSE')) return;
     if(!N.M) N.M = await import('./voz/motor.js');
-    if(!N.configurado){
-      N.configurado = true;
-      let gpu = false;
-      gpu = await hayGPU();
-      N.M.configurar({gpu});
-    }
     if(!(await N.M.modelosGuardados(engine === 'mivoz'))) return;
-    await N.M.prepararVoz();
-    if(engine === 'natural') await N.M.vozEnParalelo();
-    if(engine === 'mivoz'){ await N.M.prepararConversor(); await N.M.vozEnParalelo(true); if(store.get('vozBase')) await prepararMiVoz(); }
+    await cargarNeural();
+    if(doc && !playing) precalentarInmediato();
   }catch(e){ /* si falla, se reintenta al tocar reproducir */ }
 }
 // Para revisar problemas desde la consola del navegador.
