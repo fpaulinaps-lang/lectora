@@ -23,6 +23,16 @@ export function configurar({gpu = false} = {}){ GPU = gpu; }
 export const usaGPU = () => GPU;
 const modeloKokoro = () => HF + 'onnx/' + (GPU ? 'model.onnx' : 'model_quantized.onnx');
 export const tamanoVoz = () => GPU ? 326 : 92;   // MB que se descargan la primera vez
+// ¿Está todo descargado? Sirve para precalentar al abrir la app sin gastar datos.
+export async function modelosGuardados(conConversor){
+  try{
+    const c = await caches.open(CACHE);
+    const urls = [modeloKokoro(), HF + 'tokenizer.json'];
+    if(conConversor){ const base = new URL('./', import.meta.url).href; for(const p of ['conv_a', 'conv_b', 'conv_c']) urls.push(base + p + '.onnx', base + p + '.f16'); urls.push(base + 'huella.onnx'); }
+    for(const u of urls) if(!(await c.match(u))) return false;
+    return true;
+  }catch(e){ return false; }
+}
 
 /* ---------- descargas con memoria ---------- */
 async function traer(url, alAvanzar){
@@ -42,7 +52,9 @@ async function traer(url, alAvanzar){
   try{ if(cache) await cache.put(url, new Response(datos, {headers:{'content-type':'application/octet-stream'}})); }catch(e){}
   return datos;
 }
-const copia = u8 => u8.slice().buffer;          // ArrayBuffer propio, transferible
+// ArrayBuffer transferible. Si el Uint8Array ocupa todo su buffer se entrega tal cual: copiar los 326 MB
+// del modelo solo agregaba segundos y memoria al arranque.
+const copia = u8 => (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength) ? u8.buffer : u8.slice().buffer;
 
 // Pesos guardados en media precisión: se expanden a float32 al cargar.
 const MITAD = (()=>{
@@ -114,7 +126,9 @@ export function prepararVoz(alAvanzar = ()=>{}){
         GPU = false;
         nucleoP = null;
         nu = await nucleoCPU();
-        await nu.cargarKokoro(copia(modelo));
+        // el modelo anterior ya se entregó al proceso aparte: se vuelve a leer (sin GPU es el modelo liviano)
+        const m2 = await traer(modeloKokoro(), (n, t)=>alAvanzar('Descargando la voz natural', n, t));
+        await nu.cargarKokoro(copia(m2));
       } else throw err;
     }
     // Todas las voces pesan poco (medio MB cada una): se guardan de una vez para poder cambiar de voz sin internet.

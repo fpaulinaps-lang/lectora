@@ -1247,6 +1247,25 @@ setRate(rate); fillNatural(); setEngine(engine); refreshRec();
     if(d){ setDoc(d, store.get('pos:'+d.key, 0)); showReader(); return; }
   }
   showLibrary();
-})();
+})().then(()=> setTimeout(precalentarMotor, 800));
+
+// Al abrir la app con la voz natural o la tuya, el motor se carga de inmediato en segundo plano (tarda varios
+// segundos), así al elegir un libro y tocar reproducir ya está listo. Solo si ya se descargó: no gasta datos.
+async function precalentarMotor(){
+  try{
+    if(playing || !(engine === 'natural' || engine === 'mivoz')) return;
+    if(engine === 'mivoz' && !store.get('vozSE')) return;
+    if(!N.M) N.M = await import('./voz/motor.js');
+    if(!N.configurado){
+      N.configurado = true;
+      let gpu = false;
+      try{ gpu = !!(navigator.gpu && await navigator.gpu.requestAdapter()); }catch(e){}
+      N.M.configurar({gpu});
+    }
+    if(!(await N.M.modelosGuardados(engine === 'mivoz'))) return;
+    await N.M.prepararVoz();
+    if(engine === 'mivoz'){ await N.M.prepararConversor(); if(store.get('vozBase')) await prepararMiVoz(); }
+  }catch(e){ /* si falla, se reintenta al tocar reproducir */ }
+}
 // Para revisar problemas desde la consola del navegador.
 window.lectora = {N, audioClip, estado: () => ({idx, playing, engine, firma: doc && firma()})};
