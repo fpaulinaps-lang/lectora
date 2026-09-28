@@ -261,11 +261,17 @@ export function recortar(a){
   return a.slice(Math.max(0, i - 480), Math.min(a.length, j + 960));
 }
 export function wav(a, sr = SR){
+  let max = 0;
+  for(let i = 0; i < a.length; i++){ const v = Math.abs(a[i]); if(v > max) max = v; }
+  const factor = max > 0.98 ? 0.98 / max : 1.0;
   const b = new ArrayBuffer(44 + a.length * 2), v = new DataView(b);
   const w = (o, s) => { for(let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
   w(0, 'RIFF'); v.setUint32(4, 36 + a.length * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
   v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
   w(36, 'data'); v.setUint32(40, a.length * 2, true);
-  for(let i = 0; i < a.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, a[i])) * 32767, true);
+  for(let i = 0; i < a.length; i++){
+    const s = Math.max(-1, Math.min(1, a[i] * factor));
+    v.setInt16(44 + i * 2, s < 0 ? s * 32768 : s * 32767, true);
+  }
   return new Blob([b], {type:'audio/wav'});
 }

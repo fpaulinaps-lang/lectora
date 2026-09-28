@@ -238,6 +238,15 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
           <button class="btn rec" id="recBtn">● Grabar mi voz</button>
           <button class="btn ghost" id="recPlay" hidden>Escuchar grabación</button>
         </div>
+        <div class="field" id="baseGenderField" style="margin-top:12px">
+          <label for="baseGender">Tono de voz base</label>
+          <select id="baseGender">
+            <option value="auto">Automático (según tu tono de voz)</option>
+            <option value="mujer">Femenina (Dora / Heart)</option>
+            <option value="hombre">Masculina (Álex / Michael)</option>
+          </select>
+          <p class="hint" id="baseGenderHint" style="margin-top:4px"></p>
+        </div>
       </div>
 
       <div class="row"><button class="btn ghost" id="test">Probar esta voz</button><span class="hint" id="testNote"></span></div>

@@ -524,18 +524,70 @@ audioZip.addEventListener('pause', ()=>{ if(isAudioDoc() && playing){ playing = 
 audioZip.addEventListener('play', ()=>{ if(isAudioDoc() && !playing){ playing = true; setPlayIcon(); } });
 
 /* ================= Motor 3: voz natural y tu voz, generadas en el teléfono ================= */
-const audioClip = new Audio(); audioClip.preload = 'auto';
-const PAUSA = 0.28, PAUSA_PAG = 0.7, ADELANTE = 6;
+// Doble pletina (Dual-Deck): mientras un deck reproduce, el otro precarga la siguiente frase.
+// Esto elimina al 100% la latencia de recarga de .src del navegador (cero cortes/silencios).
+const decks = [new Audio(), new Audio()];
+decks[0].preload = 'auto'; decks[1].preload = 'auto';
+let deckActivo = 0;
+const deckUrls = [null, null];
+const deckIndices = [-1, -1];
+const PAUSA = 0.08, PAUSA_PAG = 0.35, ADELANTE = 8;
 const NAT = {es: store.get('nat:es', 'ef_dora'), en: store.get('nat:en', 'af_heart')};
 const N = {
   M: null, listos: new Map(), enDisco: new Set(), enCurso: new Set(), esperas: new Map(),
-  genTok: 0, playTok: 0, prep: false, precalentando: false, base: null, tgt: null, clipUrl: null, velocidadReal: null,
-  reset(){ this.genTok++; this.playTok++; this.listos.clear(); this.enDisco.clear(); this.enCurso.clear(); this.prep = false; this.precalentando = false; this.primera = null; this.rapido = false; this.esperas.forEach(ws=>ws.forEach(w=>w(null))); this.esperas.clear(); this.discoCargado = null; this.discoP = null; },
+  genTok: 0, playTok: 0, prep: false, precalentando: false, base: null, tgt: null, velocidadReal: null,
+  reset(){
+    this.genTok++; this.playTok++; this.listos.clear(); this.enDisco.clear(); this.enCurso.clear();
+    this.prep = false; this.precalentando = false; this.primera = null; this.rapido = false;
+    this.esperas.forEach(ws=>ws.forEach(w=>w(null))); this.esperas.clear();
+    this.discoCargado = null; this.discoP = null;
+    deckIndices[0] = -1; deckIndices[1] = -1;
+  },
 };
 function firma(){
-  return engine === 'mivoz' ? 'mv' + (store.get('vozHash','') || '') : 'nat-' + NAT.es + '-' + NAT.en;
+  const baseEs = (N.base && N.base.es) ? ('-' + N.base.es.id) : '';
+  return engine === 'mivoz' ? 'mv' + (store.get('vozHash','') || '') + baseEs : 'nat-' + NAT.es + '-' + NAT.en;
 }
 const clave = i => `${doc.key}|${firma()}|${i}`;
+
+// Normalización de nivel y estimación de tono fundamental (F0) para máxima similitud en «Mi voz»
+function normalizarPcm(pcm){
+  let max = 0;
+  for(let i=0;i<pcm.length;i++){ const v = Math.abs(pcm[i]); if(v > max) max = v; }
+  if(max > 0.005){
+    const factor = 0.95 / max;
+    const out = new Float32Array(pcm.length);
+    for(let i=0;i<pcm.length;i++) out[i] = pcm[i] * factor;
+    return out;
+  }
+  return pcm;
+}
+
+function estimarPitch(pcm, sr){
+  const win = Math.round(sr * 0.04), hop = Math.round(sr * 0.02);
+  const minLag = Math.floor(sr / 350), maxLag = Math.ceil(sr / 75);
+  const pitches = [];
+  for(let start = 0; start + win < pcm.length; start += hop){
+    let sumSq = 0;
+    for(let i = 0; i < win; i++) sumSq += pcm[start + i] * pcm[start + i];
+    if(Math.sqrt(sumSq / win) < 0.02) continue;
+    let bestR = -1, bestLag = -1;
+    for(let lag = minLag; lag <= maxLag; lag++){
+      let r = 0, e1 = 0, e2 = 0;
+      for(let i = 0; i < win - lag; i++){
+        const x = pcm[start + i], y = pcm[start + i + lag];
+        r += x * y; e1 += x * x; e2 += y * y;
+      }
+      const denom = Math.sqrt(e1 * e2);
+      const corr = denom > 1e-6 ? r / denom : 0;
+      if(corr > bestR){ bestR = corr; bestLag = lag; }
+    }
+    if(bestR > 0.45 && bestLag > 0) pitches.push(sr / bestLag);
+  }
+  if(!pitches.length) return 180;
+  pitches.sort((a,b) => a - b);
+  return pitches[Math.floor(pitches.length / 2)];
+}
 
 // µ-law: guarda la voz generada en 1 byte por muestra (unos 86 MB por hora)
 const MU = 255;
@@ -576,23 +628,33 @@ function cargarNeural(){
   neuralP.catch(()=>{ neuralP = null; });
   return neuralP;
 }
+const VOCES_POR_GENERO = {
+  mujer: { es: ['ef_dora'], en: ['af_heart', 'af_bella'] },
+  hombre: { es: ['em_alex'], en: ['am_michael', 'am_fenrir'] }
+};
+const VOCES_BASE = {es: ['ef_dora', 'em_alex'], en: ['af_heart', 'af_bella', 'am_michael', 'am_fenrir']};
+
 async function prepararMiVoz(){
   const h = store.get('vozSE', null);
   if(!h) throw new Error('Primero graba tu voz en el botón Voz › Mi voz.');
   N.tgt = Float32Array.from(h);
   const guardada = store.get('vozBase', null);
-  if(guardada && guardada.hash === store.get('vozHash')){
+  const genPref = store.get('vozGenero', 'auto');
+  if(guardada && guardada.hash === store.get('vozHash') && guardada.genPref === genPref){
     N.base = {es:{id:guardada.es.id, se:Float32Array.from(guardada.es.se)}, en:{id:guardada.en.id, se:Float32Array.from(guardada.en.se)}};
     return;
   }
-  // Elige la voz natural cuyo timbre se parece más al tuyo: la conversión queda más limpia.
-  // Las huellas de las voces naturales vienen calculadas de antemano (voz/huellas-base.json), así que esto
-  // es solo comparar números: antes generaba frases de prueba con cada voz y tardaba medio minuto sin GPU.
+  let genEfectivo = genPref;
+  if(genEfectivo === 'auto'){
+    const pitch = store.get('vozPitch', 0);
+    genEfectivo = (pitch > 0 && pitch < 160) ? 'hombre' : 'mujer';
+  }
   const huellas = await huellasBase();
   const base = {};
+  const candidatos = VOCES_POR_GENERO[genEfectivo] || VOCES_POR_GENERO.mujer;
   for(const lang of ['es','en']){
     let mejor = null;
-    for(const v of VOCES_BASE[lang]){
+    for(const v of candidatos[lang]){
       const se = Float32Array.from(huellas[v]);
       const sim = N.M.parecido(se, N.tgt);
       if(!mejor || sim > mejor.sim) mejor = {id:v, se, sim};
@@ -600,9 +662,14 @@ async function prepararMiVoz(){
     base[lang] = mejor;
   }
   N.base = base;
-  store.set('vozBase', {hash:store.get('vozHash'), es:{id:base.es.id, se:Array.from(base.es.se)}, en:{id:base.en.id, se:Array.from(base.en.se)}});
+  store.set('vozBase', {
+    hash: store.get('vozHash'),
+    genPref,
+    genEfectivo,
+    es: {id:base.es.id, se:Array.from(base.es.se)},
+    en: {id:base.en.id, se:Array.from(base.en.se)}
+  });
 }
-const VOCES_BASE = {es: ['ef_dora', 'em_alex'], en: ['af_heart', 'af_bella', 'am_michael', 'am_fenrir']};
 let huellasP = null;
 function huellasBase(){
   if(!huellasP) huellasP = fetch('voz/huellas-base.json').then(r => { if(!r.ok) throw new Error('No pude cargar las voces base.'); return r.json(); });
@@ -799,8 +866,11 @@ function prepararPrimera(i){
   pr.a = k1Promise.then(aTimbre);
   pr.resto = k1Promise.then(()=> N.M.hablar(partes[1], s.l, getVozId(), 1)).then(aTimbre);
 
+  // En cuanto pr.a está listo para sonar, permitimos que el generador empiece de inmediato con las siguientes frases
+  pr.a.then(()=>{ if(N.primera === pr) N.rapido = false; }).catch(()=>{});
+
   Promise.all([pr.a, pr.resto]).then(([a, b]) => {
-    const gap = Math.round(0.12 * N.M.SR), full = new Float32Array(a.length + gap + b.length);
+    const gap = Math.round(0.08 * N.M.SR), full = new Float32Array(a.length + gap + b.length);
     full.set(a); full.set(b, a.length + gap);
     kv.put('pistas', clave(i), aMu(full)).then(()=>{ N.enDisco.add(i); });
     entregar(i, full);
@@ -810,23 +880,58 @@ function prepararPrimera(i){
   N.primera = pr;
   return pr;
 }
-async function sonar(a, pausa, my){
-  const conPausa = new Float32Array(a.length + Math.round(pausa * N.M.SR)); conPausa.set(a);
-  if(N.clipUrl) URL.revokeObjectURL(N.clipUrl);
-  N.clipUrl = URL.createObjectURL(N.M.wav(conPausa));
-  N.cambiando = true;
-  N.priming = false;
-  N.ultimoCambioSrc = Date.now();
-  audioClip.src = N.clipUrl; audioClip.playbackRate = rate; audioClip.preservesPitch = true;
-  try{ await audioClip.play(); return true; }
-  catch(e){ if(my === N.playTok && e.name !== 'AbortError'){ stop(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); } return false; }
-  finally{ setTimeout(()=>{ N.cambiando = false; }, 120); }
+
+function cargarDeck(dIdx, a, pausa){
+  const conPausa = new Float32Array(a.length + Math.round(pausa * N.M.SR));
+  conPausa.set(a);
+  if(deckUrls[dIdx]) URL.revokeObjectURL(deckUrls[dIdx]);
+  const url = URL.createObjectURL(N.M.wav(conPausa));
+  deckUrls[dIdx] = url;
+  const d = decks[dIdx];
+  d.src = url;
+  d.playbackRate = rate;
+  d.preservesPitch = true;
+  return url;
 }
+
+async function precargarSiguiente(siguienteIdx, my){
+  if(siguienteIdx >= flat.length || my !== N.playTok || !playing) return;
+  const sigDeck = 1 - deckActivo;
+  if(deckIndices[sigDeck] === siguienteIdx && decks[sigDeck].src) return;
+  try{
+    const a = await clipDe(siguienteIdx);
+    if(my !== N.playTok || !playing || !a) return;
+    const pausa = (flat[siguienteIdx+1] && flat[siguienteIdx+1].p !== flat[siguienteIdx].p) ? PAUSA_PAG : PAUSA;
+    cargarDeck(sigDeck, a, pausa);
+    deckIndices[sigDeck] = siguienteIdx;
+  }catch(e){}
+}
+
 async function reproducirClip(i){
   const my = ++N.playTok;
   idx = i; showSentence(true); save();
   if(!N.M) N.M = await import('./voz/motor.js');
   N.resto = null;
+
+  // Si la frase i ya estaba precargada en el otro deck, alternamos inmediatamente
+  const otroDeck = 1 - deckActivo;
+  if(deckIndices[otroDeck] === i && decks[otroDeck].src){
+    deckActivo = otroDeck;
+    const d = decks[deckActivo];
+    d.playbackRate = rate; d.preservesPitch = true;
+    N.cambiando = true; N.priming = false; N.ultimoCambioSrc = Date.now();
+    try{
+      await d.play();
+      precargarSiguiente(i + 1, my);
+      return;
+    }catch(e){
+      if(my === N.playTok && e.name !== 'AbortError'){ stop(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
+      return;
+    }finally{
+      setTimeout(()=>{ N.cambiando = false; }, 120);
+    }
+  }
+
   let a = N.listos.get(i), primerTrozo = false;
   if(N.primera && N.primera.i !== i) N.primera = null;
   if(!a){
@@ -836,7 +941,7 @@ async function reproducirClip(i){
       await cargarDisco();
       a = N.listos.get(i);
       if(!a && !N.enDisco.has(i)){
-        const pr = prepararPrimera(i);
+        const pr = (!playing || N.priming) ? prepararPrimera(i) : null;
         if(pr){
           a = await pr.a;
           primerTrozo = !!pr.resto;
@@ -849,13 +954,29 @@ async function reproducirClip(i){
     setWaiting(false);
   }
   if(my !== N.playTok || !playing || !a) return;
-  const pausa = primerTrozo ? 0.12 : (flat[i+1] && flat[i+1].p !== flat[i].p) ? PAUSA_PAG : PAUSA;
-  if(!(await sonar(a, pausa, my))) return;
+
+  const pausa = primerTrozo ? 0.08 : (flat[i+1] && flat[i+1].p !== flat[i].p) ? PAUSA_PAG : PAUSA;
+  cargarDeck(deckActivo, a, pausa);
+  deckIndices[deckActivo] = i;
+
+  const d = decks[deckActivo];
+  d.playbackRate = rate; d.preservesPitch = true;
+  N.cambiando = true; N.priming = false; N.ultimoCambioSrc = Date.now();
+  try{
+    await d.play();
+    if(primerTrozo && N.rapido) N.rapido = false;
+    precargarSiguiente(i + 1, my);
+  }catch(e){
+    if(my === N.playTok && e.name !== 'AbortError'){ stop(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
+  }finally{
+    setTimeout(()=>{ N.cambiando = false; }, 120);
+  }
   if(N.velocidadReal && N.velocidadReal < 1.05 && !store.get('avisoLento')){
     store.set('avisoLento', true);
     showStatus('Tu teléfono genera esta voz un poco más lento de lo que la lee, así que a ratos va a pausar. Para evitarlo, usa «Preparar libro» en el botón Voz.');
   }
 }
+
 let precalTimer = null;
 async function precalentarInmediato(){
   clearTimeout(precalTimer);
@@ -882,9 +1003,12 @@ function precalentar(){
   if(engine === 'mivoz' && !store.get('vozSE')) return;
   precalTimer = setTimeout(precalentarInmediato, 350);
 }
-audioClip.addEventListener('ended', async ()=>{
+
+async function alTerminarDeck(dIndex){
   if(N.priming) return;
   if(!playing || !neural()) return;
+  if(dIndex !== deckActivo) return;
+
   const r = N.resto;
   if(r && r.i === idx && r.my === N.playTok){
     N.resto = null;
@@ -892,15 +1016,49 @@ audioClip.addEventListener('ended', async ()=>{
     let b = null; try{ b = await r.promesa; }catch(e){}
     setWaiting(false);
     if(r.my !== N.playTok || !playing) return;
-    if(b){ const pausa = (flat[idx+1] && flat[idx+1].p !== flat[idx].p) ? PAUSA_PAG : PAUSA; await sonar(b, pausa, r.my); return; }
+    if(b){
+      const pausa = (flat[idx+1] && flat[idx+1].p !== flat[idx].p) ? PAUSA_PAG : PAUSA;
+      cargarDeck(deckActivo, b, pausa);
+      try{ await decks[deckActivo].play(); }catch(e){}
+      precargarSiguiente(idx + 1, r.my);
+      return;
+    }
   }
-  if(idx < flat.length-1) reproducirClip(idx+1); else finished();
-});
-audioClip.addEventListener('pause', ()=>{
-  if(neural() && playing && !N.cambiando && !N.priming && (Date.now() - (N.ultimoCambioSrc || 0) > 300) && !audioClip.ended && audioClip.currentTime < audioClip.duration - 0.05){
-    /* pausa desde la pantalla bloqueada */
-    playing = false; N.playTok++; setPlayIcon(); save(true);
+
+  if(idx >= flat.length - 1){ finished(); return; }
+
+  const siguienteIdx = idx + 1;
+  const sigDeck = 1 - deckActivo;
+
+  if(deckIndices[sigDeck] === siguienteIdx && decks[sigDeck].src){
+    deckActivo = sigDeck;
+    idx = siguienteIdx;
+    showSentence(true);
+    save();
+    const d = decks[deckActivo];
+    d.playbackRate = rate; d.preservesPitch = true;
+    N.cambiando = true; N.ultimoCambioSrc = Date.now();
+    try{
+      await d.play();
+      precargarSiguiente(siguienteIdx + 1, N.playTok);
+    }catch(e){
+      reproducirClip(siguienteIdx);
+    }finally{
+      setTimeout(()=>{ N.cambiando = false; }, 120);
+    }
+  } else {
+    reproducirClip(siguienteIdx);
   }
+}
+
+decks.forEach((d, dIdx)=>{
+  d.addEventListener('ended', ()=> alTerminarDeck(dIdx));
+  d.addEventListener('pause', ()=>{
+    if(neural() && playing && dIdx === deckActivo && !N.cambiando && !N.priming && (Date.now() - (N.ultimoCambioSrc || 0) > 300) && !d.ended && d.currentTime < (d.duration || 1) - 0.05){
+      /* pausa desde la pantalla bloqueada */
+      playing = false; N.playTok++; setPlayIcon(); save(true);
+    }
+  });
 });
 
 /* ---------- Preparar el libro (instantáneo) ---------- */
@@ -957,10 +1115,13 @@ async function play(){
   }
   if(neural()){
     if(engine === 'mivoz' && !store.get('vozSE')){ openSheet(); showStatus('Primero graba tu voz: toca «● Grabar mi voz».'); return; }
-    // Desbloquea el audio con este toque (iOS exige un gesto para el primer sonido).
+    // Desbloquea ambos reproductores de audio con este toque (iOS exige un gesto para el primer sonido).
     N.priming = true;
     N.cambiando = true;
-    audioClip.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; audioClip.play().catch(()=>{});
+    decks.forEach(d => {
+      d.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+      d.play().catch(()=>{});
+    });
     playing = true; setPlayIcon(); holdScreen(true);
     asegurarGenerador();
     reproducirClip(idx);
@@ -985,7 +1146,7 @@ function stop(){
   setWaiting(false);
   if(synth) synth.cancel();
   if(!audioZip.paused) audioZip.pause();
-  if(!audioClip.paused) audioClip.pause();
+  decks.forEach(d => { if(!d.paused) d.pause(); });
   if(!N.prep) holdScreen(false);
   if(was) save(true);
   if(doc) setPlayIcon();
@@ -1121,7 +1282,8 @@ function setRate(r){
   rate = Math.round(r*100)/100; store.set('rate', rate);
   const txt = rate.toFixed(rate*10%1 ? 2 : 1).replace('.',',') + '×';
   $('#rateBtn').textContent = txt; $('#rateVal').textContent = txt; $('#rate').value = rate;
-  audioZip.playbackRate = rate; audioClip.playbackRate = rate;
+  audioZip.playbackRate = rate;
+  decks.forEach(d => { d.playbackRate = rate; d.preservesPitch = true; });
   updateMeta();
 }
 $('#rate').oninput = e=> setRate(+e.target.value);
@@ -1160,12 +1322,52 @@ function refreshRec(){
   $('#recEmpty').hidden = tiene; $('#recDone').hidden = !tiene;
   $('#recBtn').textContent = tiene ? '● Grabar de nuevo' : '● Grabar mi voz';
   $('#recPlay').hidden = !tiene;
+  const baseBox = $('#baseGenderField');
+  if(baseBox) baseBox.hidden = !tiene;
+  if(tiene){
+    const gen = store.get('vozGenero', 'auto');
+    $('#baseGender').value = gen;
+    const pitch = store.get('vozPitch', 0);
+    const baseSaved = store.get('vozBase', null);
+    const vozEsNom = (baseSaved && baseSaved.es && baseSaved.es.id === 'ef_dora') ? 'Dora (femenina)' : 'Álex (masculina)';
+    if(pitch > 0){
+      const tipo = pitch >= 160 ? 'femenino' : 'masculino';
+      $('#baseGenderHint').textContent = `Tono detectado: ${pitch} Hz (${tipo}) → Base activa: ${vozEsNom}.`;
+    } else {
+      $('#baseGenderHint').textContent = `Base activa en español: ${vozEsNom}.`;
+    }
+  }
+}
+const bgSelect = $('#baseGender');
+if(bgSelect){
+  bgSelect.onchange = async e => {
+    const val = e.target.value;
+    store.set('vozGenero', val);
+    store.del('vozBase');
+    try{
+      if(store.get('vozSE')){
+        await prepararMiVoz();
+        refreshRec();
+        if(engine === 'mivoz' && doc){
+          const era = playing;
+          stop();
+          N.reset();
+          if(era) play();
+        }
+      }
+    }catch(err){ showStatus(err.message, 'err'); }
+  };
 }
 let grabando = null;
 $('#recBtn').onclick = async ()=>{
   if(grabando){ grabando.terminar(); return; }
   let stream;
-  try{ stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:true, autoGainControl:true}}); }
+  try{
+    // Micrófono limpio de calidad estudio: sin compresión telefónica ni cancelaciones que deformen tu timbre
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
+    });
+  }
   catch(e){ $('#recTime').textContent = ''; showStatus('No pude usar el micrófono. Revisa que la Lectora tenga permiso en Ajustes › Safari › Micrófono (o en los permisos del navegador).', 'err'); return; }
   $('#recLive').hidden = false; $('#recEmpty').hidden = false; $('#recDone').hidden = true;
   const partes = []; const rec = new MediaRecorder(stream);
@@ -1192,20 +1394,23 @@ $('#recBtn').onclick = async ()=>{
     try{
       const blob = new Blob(partes, {type: rec.mimeType || 'audio/mp4'});
       const pcm = await ctx.decodeAudioData(await blob.arrayBuffer());
-      const a = pcm.getChannelData(0);
+      const crudo = pcm.getChannelData(0);
       if(pcm.duration < 8) throw new Error('La grabación quedó muy corta. Lee el texto completo (unos 20 segundos).');
+      const aNorm = normalizarPcm(crudo);
+      const pitch = estimarPitch(aNorm, pcm.sampleRate);
+      store.set('vozPitch', Math.round(pitch));
       showStatus('Analizando tu voz…');
       if(!N.M) N.M = await import('./voz/motor.js');
       if(!N.configurado){ N.configurado = true; N.M.configurar({gpu: await hayGPU()}); }
-      const se = await N.M.huellaDe(N.M.recortar(a), pcm.sampleRate);
+      const se = await N.M.huellaDe(N.M.recortar(aNorm), pcm.sampleRate);
       await kv.put('voz', 'grabacion', blob);
       store.set('vozSE', Array.from(se));
       store.set('vozHash', Date.now().toString(36));
       store.del('vozBase');
       neuralP = null;
-      await prepararMiVoz();          // instantáneo: compara tu huella con las de las voces naturales
+      await prepararMiVoz();
       hideStatus();
-      precalentarMotor();             // el motor se carga en segundo plano, sin hacerte esperar
+      precalentarMotor();
       if(engine === 'mivoz' && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentarInmediato(); }
     }catch(e){ showStatus(e.message || 'No pude procesar la grabación. Intenta otra vez.', 'err'); }
     finally{ ctx.close(); $('#recBtn').disabled = false; refreshRec(); }
@@ -1466,5 +1671,4 @@ async function precalentarMotor(){
     if(doc && !playing) precalentarInmediato();
   }catch(e){ /* si falla, se reintenta al tocar reproducir */ }
 }
-// Para revisar problemas desde la consola del navegador.
-window.lectora = {N, audioClip, estado: () => ({idx, playing, engine, firma: doc && firma()})};
+window.lectora = {N, decks, get audioClip(){ return decks[deckActivo]; }, estado: () => ({idx, playing, engine, firma: doc && firma()})};
