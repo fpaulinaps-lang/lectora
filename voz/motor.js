@@ -106,6 +106,8 @@ export function prepararVoz(alAvanzar = ()=>{}){
     vocab = JSON.parse(new TextDecoder().decode(tok)).model.vocab;
     alAvanzar('Preparando la voz', 1, 1);
     await nu.cargarKokoro(copia(modelo));
+    // Todas las voces pesan poco (medio MB cada una): se guardan de una vez para poder cambiar de voz sin internet.
+    for(const v of [...VOCES.es, ...VOCES.en]) traer(HF + 'voices/' + v.id + '.bin').catch(()=>{});
   })();
   kokoroListo.catch(()=>{ kokoroListo = null; });
   return kokoroListo;
