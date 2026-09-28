@@ -530,7 +530,7 @@ const NAT = {es: store.get('nat:es', 'ef_dora'), en: store.get('nat:en', 'af_hea
 const N = {
   M: null, listos: new Map(), enDisco: new Set(), enCurso: new Set(), esperas: new Map(),
   genTok: 0, playTok: 0, prep: false, precalentando: false, base: null, tgt: null, clipUrl: null, velocidadReal: null,
-  reset(){ this.genTok++; this.playTok++; this.listos.clear(); this.enDisco.clear(); this.enCurso.clear(); this.prep = false; this.precalentando = false; this.esperas.forEach(ws=>ws.forEach(w=>w(null))); this.esperas.clear(); this.discoCargado = null; this.discoP = null; },
+  reset(){ this.genTok++; this.playTok++; this.listos.clear(); this.enDisco.clear(); this.enCurso.clear(); this.prep = false; this.precalentando = false; this.primera = null; this.rapido = false; this.esperas.forEach(ws=>ws.forEach(w=>w(null))); this.esperas.clear(); this.discoCargado = null; this.discoP = null; },
 };
 function firma(){
   return engine === 'mivoz' ? 'mv' + (store.get('vozHash','') || '') : 'nat-' + NAT.es + '-' + NAT.en;
@@ -547,16 +547,23 @@ function progreso(msg, n, t){
   if(t > 1000) showStatus(`${msg}: ${Math.round(n/1e6)} de ${Math.round(t/1e6)} MB. Solo pasa la primera vez; usa Wi-Fi.`, null, n/t);
   else if(playing || N.prep) showStatus(msg + '…', null, null);
 }
+// ¿Hay tarjeta gráfica para la web? (iOS 18 y anteriores: no). «lectora:sinGPU» la desactiva para probar.
+async function hayGPU(){
+  if(store.get('sinGPU', false)) return false;
+  try{ return !!(navigator.gpu && await navigator.gpu.requestAdapter()); }catch(e){ return false; }
+}
 async function cargarNeural(){
   if(!N.M) N.M = await import('./voz/motor.js');
   if(!N.configurado){
     N.configurado = true;
     let gpu = false;
-    try{ const a = navigator.gpu && await navigator.gpu.requestAdapter(); gpu = !!a; }catch(e){}
+    gpu = await hayGPU();
     N.M.configurar({gpu});
   }
   await N.M.prepararVoz(progreso);
+  if(engine === 'natural') await N.M.vozEnParalelo();
   if(engine === 'mivoz'){
+    N.M.vozEnParalelo(true).catch(()=>{});   // sin GPU: otro proceso más para la voz natural, sin esperarlo
     await N.M.prepararConversor(progreso);
     await prepararMiVoz();
   }
@@ -625,10 +632,14 @@ function entregar(i, a){
 async function generador(){
   const my = ++N.genTok;
   let convCola = Promise.resolve(), pendientes = 0;
+  const trabajos = new Set();
   try{
     await cargarNeural();
     await cargarDisco();
+    const paralelo = await N.M.paralelo();
     while(my === N.genTok && ((playing && neural()) || N.prep || N.precalentando)){
+      // mientras arranca la primera frase, no competir con ella por el procesador
+      if(N.rapido){ await new Promise(r=>setTimeout(r, 100)); continue; }
       const i = siguienteFaltante();
       if(i < 0){
         if(N.prep && !flat.some((_, j) => !N.enDisco.has(j))){ terminarPrep(); break; }
@@ -642,8 +653,6 @@ async function generador(){
       const s = flat[i];
       const t0 = performance.now();
       const vozId = engine === 'mivoz' ? N.base[s.l].id : NAT[s.l];
-      const crudo = N.M.recortar(await N.M.hablar(s.t, s.l, vozId, 1));
-      if(my !== N.genTok){ N.enCurso.delete(i); break; }
       const terminar = async (a)=>{
         // ritmo real: tiempo desde que terminó la frase anterior (las etapas trabajan en paralelo)
         const ahora = performance.now(), el = (ahora - Math.max(t0, N.ultimoFin || 0)) / 1000; N.ultimoFin = ahora;
@@ -656,6 +665,21 @@ async function generador(){
         entregar(i, a);
         if(N.prep) actualizarPrep();
       };
+      if(paralelo > 1){
+        // sin tarjeta gráfica: cada proceso genera una frase distinta al mismo tiempo
+        const job = (async ()=>{
+          let a = N.M.recortar(await N.M.hablar(s.t, s.l, vozId, 1));
+          if(my !== N.genTok){ N.enCurso.delete(i); return; }
+          if(engine === 'mivoz') a = await N.M.convertir(a, N.base[s.l].se, N.tgt);
+          if(my !== N.genTok){ N.enCurso.delete(i); return; }
+          await terminar(a);
+        })().catch(e => { N.enCurso.delete(i); throw e; });
+        trabajos.add(job); job.finally(()=>trabajos.delete(job)).catch(()=>{});
+        if(trabajos.size >= paralelo) await Promise.race(trabajos);
+        continue;
+      }
+      const crudo = N.M.recortar(await N.M.hablar(s.t, s.l, vozId, 1));
+      if(my !== N.genTok){ N.enCurso.delete(i); break; }
       if(engine === 'mivoz'){
         // La voz natural (tarjeta gráfica) sigue con la frase siguiente mientras el procesador pone tu timbre.
         pendientes++;
@@ -668,6 +692,7 @@ async function generador(){
       } else await terminar(crudo);
     }
     await convCola;
+    await Promise.all(trabajos);
   }catch(e){
     N.enCurso.clear();
     if(my === N.genTok){ stop(); showStatus(e.message || String(e), 'err'); }
@@ -687,20 +712,46 @@ async function clipDe(i){
   asegurarGenerador();
   return await new Promise(res=>{ if(!N.esperas.has(i)) N.esperas.set(i, []); N.esperas.get(i).push(res); });
 }
-async function reproducirClip(i){
-  const my = ++N.playTok;
-  idx = i; showSentence(true); save();
-  if(!N.M) N.M = await import('./voz/motor.js');
-  let a = N.listos.get(i);
-  if(!a){
-    setWaiting(true);
-    showStatus('Iniciando lectura…');
-    a = await clipDe(i);
-    hideStatus();
-    setWaiting(false);
-  }
-  if(my !== N.playTok || !playing || !a) return;
-  const pausa = (flat[i+1] && flat[i+1].p !== flat[i].p) ? PAUSA_PAG : PAUSA;
+// Parte una frase en un primer trozo corto (hasta la primera coma, o unas 6-8 palabras) y el resto,
+// para poder empezar a hablar mucho antes.
+function partirFrase(t){
+  if(t.length < 50) return null;
+  let corte = -1;
+  const re = /[,;:]\s/g; let m;
+  while((m = re.exec(t))){ if(m.index >= 12 && m.index <= 60){ corte = m.index + 1; break; } if(m.index > 60) break; }
+  if(corte < 0){ corte = t.lastIndexOf(' ', 42); if(corte < 20) return null; }
+  const a = t.slice(0, corte).trim(), b = t.slice(corte).trim();
+  return b.length >= 10 ? [a, b] : null;
+}
+// La primera frase (la que va a sonar al tocar reproducir) se genera en dos trozos, pedidos de una vez.
+// Se usa al abrir un libro (precalentar) y al tocar reproducir si la frase no estaba lista.
+function prepararPrimera(i){
+  if(N.primera && N.primera.i === i && N.primera.firma === firma()) return N.primera;
+  const s = flat[i], partes = partirFrase(s.t);
+  if(!partes || N.enCurso.has(i) || N.enDisco.has(i) || N.listos.has(i)) return null;
+  if(engine === 'mivoz' && !store.get('vozSE')) return null;
+  N.enCurso.add(i); N.rapido = true;
+  const pr = {i, firma: firma()};
+  const aTimbre = async x => { x = N.M.recortar(x); return engine === 'mivoz' ? await N.M.convertir(x, N.base[s.l].se, N.tgt) : x; };
+  const pedidos = cargarNeural().then(()=>{
+    const vozId = engine === 'mivoz' ? N.base[s.l].id : NAT[s.l];
+    return {k1: N.M.hablar(partes[0], s.l, vozId, 1), k2: N.M.hablar(partes[1], s.l, vozId, 1)};
+  });
+  pr.a = pedidos.then(p => p.k1).then(aTimbre);
+  pr.resto = pedidos.then(p => p.k2).then(aTimbre);
+  Promise.all([pr.a, pr.resto]).then(([a, b]) => {
+    if(N.primera !== pr) return;
+    const gap = Math.round(0.12 * N.M.SR), full = new Float32Array(a.length + gap + b.length);
+    full.set(a); full.set(b, a.length + gap);
+    kv.put('pistas', clave(i), aMu(full)).then(()=>{ N.enDisco.add(i); });
+    N.enCurso.delete(i); entregar(i, full);
+  }).catch(()=>{ N.enCurso.delete(i); if(N.primera === pr) N.primera = null; })
+    .finally(()=>{ if(N.primera === pr) N.rapido = false; });
+  pr.a.catch(()=>{}); pr.resto.catch(()=>{});
+  N.primera = pr;
+  return pr;
+}
+async function sonar(a, pausa, my){
   const conPausa = new Float32Array(a.length + Math.round(pausa * N.M.SR)); conPausa.set(a);
   if(N.clipUrl) URL.revokeObjectURL(N.clipUrl);
   N.clipUrl = URL.createObjectURL(N.M.wav(conPausa));
@@ -708,9 +759,35 @@ async function reproducirClip(i){
   N.priming = false;
   N.ultimoCambioSrc = Date.now();
   audioClip.src = N.clipUrl; audioClip.playbackRate = rate; audioClip.preservesPitch = true;
-  try{ await audioClip.play(); }
-  catch(e){ if(my === N.playTok && e.name !== 'AbortError'){ stop(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); } return; }
+  try{ await audioClip.play(); return true; }
+  catch(e){ if(my === N.playTok && e.name !== 'AbortError'){ stop(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); } return false; }
   finally{ setTimeout(()=>{ N.cambiando = false; }, 120); }
+}
+async function reproducirClip(i){
+  const my = ++N.playTok;
+  idx = i; showSentence(true); save();
+  if(!N.M) N.M = await import('./voz/motor.js');
+  N.resto = null;
+  let a = N.listos.get(i), primerTrozo = false;
+  if(N.primera && N.primera.i !== i) N.primera = null;
+  if(!a){
+    setWaiting(true);
+    showStatus('Iniciando lectura…');
+    try{
+      await cargarDisco();
+      a = N.listos.get(i);
+      if(!a && !N.enDisco.has(i)){
+        const pr = prepararPrimera(i);
+        if(pr){ a = await pr.a; primerTrozo = true; N.resto = {i, my, promesa: pr.resto}; }
+      }
+    }catch(e){ a = null; }
+    if(!a) a = await clipDe(i);
+    hideStatus();
+    setWaiting(false);
+  }
+  if(my !== N.playTok || !playing || !a) return;
+  const pausa = primerTrozo ? 0.12 : (flat[i+1] && flat[i+1].p !== flat[i].p) ? PAUSA_PAG : PAUSA;
+  if(!(await sonar(a, pausa, my))) return;
   if(N.velocidadReal && N.velocidadReal < 1.05 && !store.get('avisoLento')){
     store.set('avisoLento', true);
     showStatus('Tu teléfono genera esta voz un poco más lento de lo que la lee, así que a ratos va a pausar. Para evitarlo, usa «Preparar libro» en el botón Voz.');
@@ -730,13 +807,23 @@ function precalentar(){
     let hayFalta = false;
     for(let j = idx; j < fin; j++){ if(falta(j)){ hayFalta = true; break; } }
     if(!hayFalta) return;
+    try{ if(!N.M) N.M = await import('./voz/motor.js'); prepararPrimera(idx); }catch(e){}
     N.precalentando = true;
     asegurarGenerador();
   }, 350);
 }
-audioClip.addEventListener('ended', ()=>{
+audioClip.addEventListener('ended', async ()=>{
   if(N.priming) return;
   if(!playing || !neural()) return;
+  const r = N.resto;
+  if(r && r.i === idx && r.my === N.playTok){
+    N.resto = null;
+    setWaiting(true);
+    let b = null; try{ b = await r.promesa; }catch(e){}
+    setWaiting(false);
+    if(r.my !== N.playTok || !playing) return;
+    if(b){ const pausa = (flat[idx+1] && flat[idx+1].p !== flat[idx].p) ? PAUSA_PAG : PAUSA; await sonar(b, pausa, r.my); return; }
+  }
   if(idx < flat.length-1) reproducirClip(idx+1); else finished();
 });
 audioClip.addEventListener('pause', ()=>{
@@ -880,6 +967,15 @@ function reiniciarNeural(){
   const era = playing; stop(); N.reset();
   if(era) play(); else precalentar();
 }
+// Con qué calcula la voz este teléfono (solo se sabe una vez cargado el motor).
+function notaMotor(){
+  if(!N.M || !N.configurado) return '';
+  if(N.M.usaGPU()) return ' Tu teléfono genera la voz con la tarjeta gráfica (modo rápido).';
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  return ' Tu teléfono genera la voz con el procesador' + (self.crossOriginIsolated ? '' : ' (un solo núcleo)') + ', que es más lento' +
+    (ios ? ': con iOS 26 o más nuevo usaría la tarjeta gráfica y sería unas 4 veces más rápido.' : '.') +
+    ' Para no esperar, usa «Preparar libro».';
+}
 function setEngine(e){
   const antes = engine;
   engine = e; store.set('engine', e);
@@ -889,7 +985,7 @@ function setEngine(e){
   $('#blackBtn').hidden = !doc || isAudioDoc();
   const tam = N.M ? N.M.tamanoVoz() : (navigator.gpu ? 326 : 92);
   $('#dlNote').textContent = e === 'sistema' ? '' :
-    `La primera vez descarga la voz (unos ${tam + (e==='mivoz' ? 70 : 0)} MB; conviene Wi-Fi). Después funciona sin internet.`;
+    `La primera vez descarga la voz (unos ${tam + (e==='mivoz' ? 70 : 0)} MB; conviene Wi-Fi). Después funciona sin internet.` + notaMotor();
   updateVoiceBtn(); refreshRec();
   if(antes !== e && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentar(); }
 }
@@ -989,7 +1085,7 @@ $('#recBtn').onclick = async ()=>{
       if(pcm.duration < 8) throw new Error('La grabación quedó muy corta. Lee el texto completo (unos 20 segundos).');
       showStatus('Analizando tu voz…');
       if(!N.M) N.M = await import('./voz/motor.js');
-      if(!N.configurado){ N.configurado = true; let gpu=false; try{ gpu = !!(navigator.gpu && await navigator.gpu.requestAdapter()); }catch(e){} N.M.configurar({gpu}); }
+      if(!N.configurado){ N.configurado = true; N.M.configurar({gpu: await hayGPU()}); }
       const se = await N.M.huellaDe(N.M.recortar(a), pcm.sampleRate);
       await kv.put('voz', 'grabacion', blob);
       store.set('vozSE', Array.from(se));
@@ -1259,12 +1355,13 @@ async function precalentarMotor(){
     if(!N.configurado){
       N.configurado = true;
       let gpu = false;
-      try{ gpu = !!(navigator.gpu && await navigator.gpu.requestAdapter()); }catch(e){}
+      gpu = await hayGPU();
       N.M.configurar({gpu});
     }
     if(!(await N.M.modelosGuardados(engine === 'mivoz'))) return;
     await N.M.prepararVoz();
-    if(engine === 'mivoz'){ await N.M.prepararConversor(); if(store.get('vozBase')) await prepararMiVoz(); }
+    if(engine === 'natural') await N.M.vozEnParalelo();
+    if(engine === 'mivoz'){ await N.M.prepararConversor(); await N.M.vozEnParalelo(true); if(store.get('vozBase')) await prepararMiVoz(); }
   }catch(e){ /* si falla, se reintenta al tocar reproducir */ }
 }
 // Para revisar problemas desde la consola del navegador.

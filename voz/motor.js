@@ -5,7 +5,7 @@
 // Sin ella, corre en la página con varios núcleos del procesador: más lento, y la pantalla se traba un poco
 // mientras genera.
 import { fonemasEs } from './es-fonemas.js';
-import { crearNucleo, remuestrear } from './nucleo.js';
+import { remuestrear } from './nucleo.js';
 export { remuestrear };
 
 const HF = 'https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/';
@@ -74,68 +74,95 @@ function expandir(u8){
   return f.buffer;
 }
 
-/* ---------- el núcleo: en un proceso aparte (GPU) o en la página (CPU) ---------- */
-async function nucleoCPU(){
-  const ort = await import('../vendor/ort/ort.wasm.min.mjs');
-  ort.env.wasm.wasmPaths = new URL('../vendor/ort/', import.meta.url).href;
-  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
-  return crearNucleo(ort, false);
+/* ---------- procesos aparte: la voz nunca se calcula en la página (la congelaría) ---------- */
+// Con tarjeta gráfica: un proceso (voz-worker.js) hace todo en la GPU.
+// Sin ella (iPhone con iOS 18 o anterior): dos procesos con el procesador, uno por núcleo, que trabajan en
+// paralelo. Con tu voz, uno genera la voz natural y el otro le pone tu timbre; con la voz natural, los dos
+// generan frases distintas. (ONNX Runtime se cuelga si usa varios hilos dentro de un proceso aparte.)
+function crearProceso(url){
+  const w = new Worker(url, {type:'module'});
+  const pendientes = new Map(); let n = 0;
+  const p = {carga: 0, kokoro: false, conversor: false};
+  p.listo = new Promise((res, rej)=>{
+    w.onmessage = e => {
+      if(e.data.listo){ res(e.data); return; }
+      const q = pendientes.get(e.data.id); if(!q) return; pendientes.delete(e.data.id); p.carga--;
+      e.data.ok ? q.res(e.data.r) : q.rej(new Error(e.data.error));
+    };
+    w.onerror = e => rej(new Error('No se pudo iniciar el motor de voz: ' + (e.message || 'error')));
+  });
+  p.llamar = (fn, ...args) => new Promise((res, rej)=>{
+    const id = ++n; pendientes.set(id, {res, rej}); p.carga++;
+    // los buffers (también los que van dentro de un objeto) se transfieren en vez de copiarse
+    const bufs = args.flatMap(x => x instanceof ArrayBuffer ? [x] : (x && typeof x === 'object' && !ArrayBuffer.isView(x)) ? Object.values(x).filter(v => v instanceof ArrayBuffer) : []);
+    w.postMessage({id, fn, args}, bufs);
+  });
+  p.terminar = () => w.terminate();
+  return p;
 }
-let nucleoP = null;
-function nucleo(){
-  if(nucleoP) return nucleoP;
-  nucleoP = (async ()=>{
+let procP = null;
+function procesos(){
+  if(procP) return procP;
+  procP = (async ()=>{
     if(GPU){
-      const w = new Worker(new URL('./voz-worker.js', import.meta.url), {type:'module'});
-      const pendientes = new Map(); let n = 0;
-      const gpuEnProceso = await new Promise((res, rej)=>{
-        w.onmessage = e => {
-          if(e.data.listo){ res(e.data.gpu); return; }
-          const p = pendientes.get(e.data.id); if(!p) return; pendientes.delete(e.data.id);
-          e.data.ok ? p.res(e.data.r) : p.rej(new Error(e.data.error));
-        };
-        w.onerror = e => rej(new Error('No se pudo iniciar el motor de voz: ' + (e.message || 'error')));
-      });
-      if(!gpuEnProceso){ w.terminate(); GPU = false; return nucleoCPU(); }
-      const llamar = (fn, args, transferir = []) => new Promise((res, rej)=>{
-        const id = ++n; pendientes.set(id, {res, rej}); w.postMessage({id, fn, args}, transferir);
-      });
-      return new Proxy({}, {get: (_, fn) => fn === 'then' ? undefined : (...args) => llamar(fn, args, args.filter(x => x instanceof ArrayBuffer))});
+      const w = crearProceso(new URL('./voz-worker.js', import.meta.url));
+      const info = await w.listo;
+      if(info.gpu) return {gpu: true, voz: [w], conv: w, todos: [w]};
+      w.terminar(); GPU = false;
     }
-    return nucleoCPU();
+    const a = crearProceso(new URL('./voz-worker-cpu.js', import.meta.url));
+    const b = crearProceso(new URL('./voz-worker-cpu.js', import.meta.url));
+    await Promise.all([a.listo, b.listo]);
+    return {gpu: false, voz: [a], conv: b, extra: b, todos: [a, b]};
   })();
-  nucleoP.catch(()=>{ nucleoP = null; });
-  return nucleoP;
+  procP.catch(()=>{ procP = null; });
+  return procP;
 }
 
 /* ---------- voz natural ---------- */
-let vocab = null, kokoroListo = null;
+let vocab = null, kokoroListo = null, paraleloListo = null;
+async function cargarKokoroEn(p, alAvanzar){
+  const modelo = await traer(modeloKokoro(), (n, t)=>alAvanzar('Descargando la voz natural', n, t));
+  await p.llamar('cargarKokoro', copia(modelo));
+  p.kokoro = true;
+}
 export function prepararVoz(alAvanzar = ()=>{}){
   if(!kokoroListo) kokoroListo = (async ()=>{
-    let nu = await nucleo();
-    const [modelo, tok] = await Promise.all([
-      traer(modeloKokoro(), (n, t)=>alAvanzar('Descargando la voz natural', n, t)),
-      traer(HF + 'tokenizer.json'),
-    ]);
+    let pr = await procesos();
+    const tok = await traer(HF + 'tokenizer.json');
     vocab = JSON.parse(new TextDecoder().decode(tok)).model.vocab;
     alAvanzar('Preparando la voz', 1, 1);
     try{
-      await nu.cargarKokoro(copia(modelo));
+      await cargarKokoroEn(pr.voz[0], alAvanzar);
     }catch(err){
-      if(GPU){
-        GPU = false;
-        nucleoP = null;
-        nu = await nucleoCPU();
-        // el modelo anterior ya se entregó al proceso aparte: se vuelve a leer (sin GPU es el modelo liviano)
-        const m2 = await traer(modeloKokoro(), (n, t)=>alAvanzar('Descargando la voz natural', n, t));
-        await nu.cargarKokoro(copia(m2));
-      } else throw err;
+      if(!pr.gpu) throw err;
+      // la tarjeta gráfica falló: se sigue con el procesador (y el modelo liviano)
+      pr.todos.forEach(p => p.terminar()); procP = null; GPU = false;
+      pr = await procesos();
+      await cargarKokoroEn(pr.voz[0], alAvanzar);
     }
     // Todas las voces pesan poco (medio MB cada una): se guardan de una vez para poder cambiar de voz sin internet.
     for(const v of [...VOCES.es, ...VOCES.en]) traer(HF + 'voices/' + v.id + '.bin').catch(()=>{});
   })();
   kokoroListo.catch(()=>{ kokoroListo = null; });
   return kokoroListo;
+}
+// Cuántas frases se pueden generar a la vez (procesos con la voz natural cargada).
+export async function paralelo(){ const pr = await procesos(); return Math.max(1, pr.voz.filter(x => x.kokoro).length); }
+// Solo sin tarjeta gráfica: un segundo proceso también genera voz natural (el doble de rápido).
+// Con la voz natural se usa el segundo proceso; con tu voz ese ya está ocupado con el timbre, así que se abre un tercero.
+export function vozEnParalelo(conTimbre = false){
+  if(!paraleloListo) paraleloListo = (async ()=>{
+    await prepararVoz();
+    const pr = await procesos();
+    if(pr.gpu || pr.voz.length > 1) return;
+    let q = pr.extra;
+    if(conTimbre){ q = crearProceso(new URL('./voz-worker-cpu.js', import.meta.url)); await q.listo; pr.todos.push(q); }
+    await cargarKokoroEn(q, ()=>{});
+    pr.voz.push(q);
+  })();
+  paraleloListo.catch(()=>{ paraleloListo = null; });
+  return paraleloListo;
 }
 const vocesCargadas = new Map();
 async function estiloDe(id){
@@ -166,13 +193,15 @@ export async function hablar(texto, lang, vozId, velocidad = 1){
   const ps = await fonemas(texto, lang);
   const ids = [...ps].map(c => vocab[c]).filter(x => x !== undefined);
   const estilo = await estiloDe(vozId);
-  const nu = await nucleo();
+  const pr = await procesos();
+  // el proceso con voz natural cargada que esté menos ocupado
+  const p = pr.voz.filter(x => x.kokoro).sort((x, y) => x.carga - y.carga)[0];
   const trozos = [];
   for(let i = 0; i < ids.length; ){                       // Kokoro acepta hasta 510 fonemas por vez
     let fin = Math.min(ids.length, i + 500);
     if(fin < ids.length){ const esp = ids.lastIndexOf(vocab[' '], fin); if(esp > i + 100) fin = esp; }
     const parte = ids.slice(i, fin), n = Math.min(parte.length, 509);
-    trozos.push(await nu.kokoro(parte, estilo.slice(256 * n, 256 * n + 256), velocidad));
+    trozos.push(await p.llamar('kokoro', parte, estilo.slice(256 * n, 256 * n + 256), velocidad));
     i = fin;
   }
   return unir(trozos);
@@ -184,7 +213,7 @@ let huellaLista = null, convListo = null;
 export function prepararHuella(){
   if(!huellaLista) huellaLista = (async ()=>{
     const h = await traer(new URL('./huella.onnx', import.meta.url).href);
-    await (await nucleo()).cargarHuella(copia(h));
+    await (await procesos()).conv.llamar('cargarHuella', copia(h));
   })();
   huellaLista.catch(()=>{ huellaLista = null; });
   return huellaLista;
@@ -200,7 +229,10 @@ export function prepararConversor(alAvanzar = ()=>{}){
     ]));
     alAvanzar('Preparando tu voz', 1, 1);
     const [a, aP, b, bP, c, cP] = bajados;
-    await (await nucleo()).cargarConversor({a: copia(a), aPesos: expandir(aP), b: copia(b), bPesos: expandir(bP), c: copia(c), cPesos: expandir(cP)});
+    const pr = await procesos();
+    const partes = {a: copia(a), aPesos: expandir(aP), b: copia(b), bPesos: expandir(bP), c: copia(c), cPesos: expandir(cP)};
+    await pr.conv.llamar('cargarConversor', partes);
+    pr.conv.conversor = true;
     await prepararHuella();
   })();
   convListo.catch(()=>{ convListo = null; });
@@ -209,12 +241,12 @@ export function prepararConversor(alAvanzar = ()=>{}){
 // Huella del timbre (256 números) a partir de audio a cualquier frecuencia.
 export async function huellaDe(audio, sr){
   await prepararHuella();
-  return await (await nucleo()).huella(Float32Array.from(audio), sr);
+  return await (await procesos()).conv.llamar('huella', Float32Array.from(audio), sr);
 }
 // El cambio de frecuencia también se hace en el núcleo, para no trabar la pantalla.
 export async function convertir(audio24, src, tgt){
   await prepararConversor();
-  return await (await nucleo()).convertir(Float32Array.from(audio24), Float32Array.from(src), Float32Array.from(tgt), SR);
+  return await (await procesos()).conv.llamar('convertir', Float32Array.from(audio24), Float32Array.from(src), Float32Array.from(tgt), SR);
 }
 export function parecido(a, b){
   let d = 0, na = 0, nb = 0;
