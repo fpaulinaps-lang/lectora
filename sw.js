@@ -1,6 +1,6 @@
 // Guarda la app en el teléfono para que abra sin internet, y la aísla (COOP/COEP)
 // para que la voz pueda usar varios núcleos del procesador.
-const CACHE = 'lectora-v12';                // la app: se renueva con cada versión
+const CACHE = 'lectora-v13';                // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo (motor de voz, etc.): sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'voz/motor.js', 'voz/es-fonemas.js', 'voz/nucleo.js', 'voz/voz-worker.js', 'vendor/phonemizer.js',
@@ -10,8 +10,19 @@ const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf
 const GRANDES = /\.(onnx|f16|bin)$/;
 const ESPERA_RED = 4000;                    // con mala señal, no esperar más que esto antes de usar la copia guardada
 
+// GitHub Pages deja los archivos 10 minutos en la memoria del navegador. Para que una versión nueva no
+// mezcle archivos viejos y nuevos, se piden con ?v=<versión> (sin opciones de fetch, que Safari rechaza)
+// y se guardan con su dirección normal.
+// Las librerías de vendor/ no cambian nunca (y el motor pesa 33 MB): esas no se vuelven a pedir.
+const fresco = url => /\/vendor\//.test(url) ? url : url + (url.includes('?') ? '&' : '?') + 'v=' + CACHE;
+
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => Promise.all(FILES.map(async f => {
+    const url = new URL(f, self.registration.scope).href;
+    const r = await fetch(fresco(url));
+    if (!r.ok) throw new Error('No se pudo guardar ' + f);
+    await c.put(url, r);
+  }))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   // Solo se borran las versiones viejas de la app; el motor de voz y los modelos se conservan.
@@ -41,7 +52,7 @@ function aislar(r){
 
 // Primero la red, para que las mejoras lleguen; sin conexión (o si tarda demasiado), la copia guardada.
 async function redPrimero(req, clave, cacheNombre){
-  const peticion = (typeof req === 'string' || req.mode === 'navigate') ? (req.url || req) : req;
+  const peticion = fresco(typeof req === 'string' ? req : req.url);
   const guardada = caches.match(clave);
   try{
     const red = fetch(peticion).then(r => {
