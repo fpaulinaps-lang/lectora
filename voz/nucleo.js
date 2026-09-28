@@ -47,7 +47,10 @@ export function crearNucleo(ort, gpu){
   let fila = Promise.resolve();
   const turno = fn => { const p = fila.then(fn); fila = p.catch(()=>{}); return p; };
   const correr = (s, feeds) => turno(() => s.run(feeds));
-  const primero = r => Object.values(r)[0].data;
+  const primero = async r => {
+    const t = Object.values(r)[0];
+    return t.getData ? await t.getData() : t.data;
+  };
 
   return {
     async cargarKokoro(bytes){ if(!kokoro) kokoro = await turno(() => ses(bytes, EP_GPU)); return true; },
@@ -58,19 +61,19 @@ export function crearNucleo(ort, gpu){
         style: T(Float32Array.from(estilo), [1, 256]),
         speed: T(new Float32Array([velocidad]), [1]),
       });
-      return Float32Array.from(primero(r));
+      return Float32Array.from(await primero(r));
     },
     async cargarConversor(p){
       if(a) return true;
       a = await turno(() => ses(p.a, EP_GPU, p.aPesos, 'conv_a'));
-      b = await turno(() => ses(p.b, EP_GPU, p.bPesos, 'conv_b'));
+      b = await turno(() => ses(p.b, EP_CPU, p.bPesos, 'conv_b'));
       c = await turno(() => ses(p.c, EP_GPU, p.cPesos, 'conv_c'));
       return true;
     },
     async cargarHuella(bytes){ if(!huella) huella = await turno(() => ses(bytes, EP_CPU)); return true; },
     async huella(audio, sr){
       const a22 = remuestrear(audio, sr, SR_CONV);
-      return Float32Array.from(primero(await correr(huella, {audio: T(a22, [1, a22.length])})));
+      return Float32Array.from(await primero(await correr(huella, {audio: T(a22, [1, a22.length])})));
     },
     // audio a la frecuencia sr -> audio con tu timbre, a la misma frecuencia
     async convertir(audio, src, tgt, sr){
@@ -82,8 +85,10 @@ export function crearNucleo(ort, gpu){
       const zv = Object.values(z)[0];
       const zc = T(Float32Array.from(await (zv.getData ? zv.getData() : zv.data)), zv.dims);
       const zh = await correr(b, {z: zc, src: T(Float32Array.from(src), [1, 256, 1]), tgt: T(Float32Array.from(tgt), [1, 256, 1])});
-      const y = await correr(c, {z: Object.values(zh)[0]});
-      return Float32Array.from(remuestrear(primero(y), SR_CONV, sr));
+      const zhv = Object.values(zh)[0];
+      const zhc = T(Float32Array.from(await (zhv.getData ? zhv.getData() : zhv.data)), zhv.dims);
+      const y = await correr(c, {z: zhc});
+      return Float32Array.from(remuestrear(await primero(y), SR_CONV, sr));
     },
     SR_CONV,
   };

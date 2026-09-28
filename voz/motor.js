@@ -54,7 +54,9 @@ const MITAD = (()=>{
   return t;
 })();
 function expandir(u8){
-  const u16 = new Uint16Array(u8.buffer, u8.byteOffset, u8.byteLength / 2);
+  const buf = (u8.byteOffset % 2 === 0) ? u8.buffer : u8.slice().buffer;
+  const off = (u8.byteOffset % 2 === 0) ? u8.byteOffset : 0;
+  const u16 = new Uint16Array(buf, off, Math.floor(u8.byteLength / 2));
   const f = new Float32Array(u16.length);
   for(let i = 0; i < u16.length; i++) f[i] = MITAD[u16[i]];
   return f.buffer;
@@ -98,14 +100,23 @@ function nucleo(){
 let vocab = null, kokoroListo = null;
 export function prepararVoz(alAvanzar = ()=>{}){
   if(!kokoroListo) kokoroListo = (async ()=>{
-    const nu = await nucleo();
+    let nu = await nucleo();
     const [modelo, tok] = await Promise.all([
       traer(modeloKokoro(), (n, t)=>alAvanzar('Descargando la voz natural', n, t)),
       traer(HF + 'tokenizer.json'),
     ]);
     vocab = JSON.parse(new TextDecoder().decode(tok)).model.vocab;
     alAvanzar('Preparando la voz', 1, 1);
-    await nu.cargarKokoro(copia(modelo));
+    try{
+      await nu.cargarKokoro(copia(modelo));
+    }catch(err){
+      if(GPU){
+        GPU = false;
+        nucleoP = null;
+        nu = await nucleoCPU();
+        await nu.cargarKokoro(copia(modelo));
+      } else throw err;
+    }
     // Todas las voces pesan poco (medio MB cada una): se guardan de una vez para poder cambiar de voz sin internet.
     for(const v of [...VOCES.es, ...VOCES.en]) traer(HF + 'voices/' + v.id + '.bin').catch(()=>{});
   })();

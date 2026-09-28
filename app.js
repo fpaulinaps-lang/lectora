@@ -76,13 +76,20 @@ const kv = {
 
 /* ---------- Texto del PDF ---------- */
 function pageLines(content){
-  const lines = []; let cur = ''; let lastY = null;
+  const lines = []; let cur = ''; let lastY = null, lastX = null, lastW = null;
   for(const it of content.items){
     if(typeof it.str !== 'string') continue;
+    const x = it.transform ? it.transform[4] : null;
     const y = it.transform ? Math.round(it.transform[5]) : null;
-    if(lastY !== null && y !== null && Math.abs(y-lastY) > 2 && cur.trim()){ lines.push(cur); cur=''; }
+    if(lastY !== null && y !== null && Math.abs(y-lastY) > 2 && cur.trim()){
+      lines.push(cur); cur=''; lastX = null; lastW = null;
+    }
+    if(cur && lastX !== null && x !== null && lastW !== null && (x - (lastX + lastW)) > 2 && !cur.endsWith(' ') && !it.str.startsWith(' ')){
+      cur += ' ';
+    }
     cur += it.str;
-    if(it.hasEOL){ lines.push(cur); cur=''; }
+    if(it.hasEOL){ lines.push(cur); cur=''; lastX = null; lastW = null; }
+    else { lastX = x; lastW = it.width || 0; }
     if(y !== null) lastY = y;
   }
   if(cur.trim()) lines.push(cur);
@@ -254,7 +261,7 @@ function setDoc(d, pos){
   store.set('last', d.key);
   if(zipUrl){ URL.revokeObjectURL(zipUrl); zipUrl = null; audioZip.removeAttribute('src'); audioZip.load(); }
   N.reset();
-  $('#blackBtn').hidden = isAudioDoc() || neural();
+  $('#blackBtn').hidden = isAudioDoc();
   updateVoiceBtn();
   renderPage(flat.length ? flat[idx].p : 0);
   updateMeta(); mediaMeta();
@@ -358,7 +365,7 @@ async function holdScreen(on){
 
 /* ================= Motor 1: voces del teléfono ================= */
 let token = 0, lastStart = 0, stalledSince = 0, voices = [], voiceBy = {es:null, en:null};
-function speak(){
+function speak(continuando = false){
   const my = ++token;
   const s = flat[idx];
   if(!s){ stop(); return; }
@@ -370,17 +377,17 @@ function speak(){
   u.onstart = ()=>{ if(my===token) lastStart = Date.now(); };
   u.onend = ()=>{
     if(my!==token || !playing) return;
-    if(idx < flat.length-1){ idx++; speak(); } else finished();
+    if(idx < flat.length-1){ idx++; speak(true); } else finished();
   };
   u.onerror = e=>{
     if(my!==token || !playing) return;
     if(e.error==='interrupted' || e.error==='canceled') return;
     if(e.error==='not-allowed'){ stop(); showStatus('El teléfono bloqueó el audio. Toca el botón de reproducir otra vez.'); return; }
-    if(idx < flat.length-1){ idx++; speak(); } else stop();
+    if(idx < flat.length-1){ idx++; speak(true); } else stop();
   };
   window._u = u; lastStart = Date.now(); stalledSince = 0;
-  if(synth.speaking || synth.pending){ synth.cancel(); setTimeout(()=>{ if(my===token && playing) synth.speak(u); }, 90); }
-  else synth.speak(u);
+  if(!continuando && (synth.speaking || synth.pending)) synth.cancel();
+  synth.speak(u);
 }
 setInterval(()=>{
   if(!playing || isAudioDoc() || neural() || !synth) return;
@@ -641,20 +648,28 @@ async function reproducirClip(i){
   if(N.clipUrl) URL.revokeObjectURL(N.clipUrl);
   N.clipUrl = URL.createObjectURL(N.M.wav(conPausa));
   N.cambiando = true;
+  N.priming = false;
+  N.ultimoCambioSrc = Date.now();
   audioClip.src = N.clipUrl; audioClip.playbackRate = rate; audioClip.preservesPitch = true;
   try{ await audioClip.play(); }
   catch(e){ if(my === N.playTok && e.name !== 'AbortError'){ stop(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); } return; }
-  finally{ N.cambiando = false; }
+  finally{ setTimeout(()=>{ N.cambiando = false; }, 120); }
   if(N.velocidadReal && N.velocidadReal < 1.05 && !store.get('avisoLento')){
     store.set('avisoLento', true);
     showStatus('Tu teléfono genera esta voz un poco más lento de lo que la lee, así que a ratos va a pausar. Para evitarlo, usa «Preparar libro» en el botón Voz.');
   }
 }
 audioClip.addEventListener('ended', ()=>{
+  if(N.priming) return;
   if(!playing || !neural()) return;
   if(idx < flat.length-1) reproducirClip(idx+1); else finished();
 });
-audioClip.addEventListener('pause', ()=>{ if(neural() && playing && !N.cambiando && !audioClip.ended && audioClip.currentTime < audioClip.duration - 0.05){ /* pausa desde la pantalla bloqueada */ playing = false; N.playTok++; setPlayIcon(); save(true); } });
+audioClip.addEventListener('pause', ()=>{
+  if(neural() && playing && !N.cambiando && !N.priming && (Date.now() - (N.ultimoCambioSrc || 0) > 300) && !audioClip.ended && audioClip.currentTime < audioClip.duration - 0.05){
+    /* pausa desde la pantalla bloqueada */
+    playing = false; N.playTok++; setPlayIcon(); save(true);
+  }
+});
 
 /* ---------- Preparar el libro entero ---------- */
 function actualizarPrep(){
@@ -683,9 +698,10 @@ async function play(){
   if(neural()){
     if(engine === 'mivoz' && !store.get('vozSE')){ openSheet(); showStatus('Primero graba tu voz: toca «● Grabar mi voz».'); return; }
     // Desbloquea el audio con este toque (iOS exige un gesto para el primer sonido).
+    N.priming = true;
     N.cambiando = true;
     audioClip.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; audioClip.play().catch(()=>{});
-    playing = true; setPlayIcon(); holdScreen(false);
+    playing = true; setPlayIcon(); holdScreen(true);
     asegurarGenerador();
     reproducirClip(idx);
     return;
@@ -695,7 +711,7 @@ async function play(){
 }
 function stop(){
   const was = playing;
-  playing = false; token++; N.playTok++;
+  playing = false; token++; N.playTok++; N.priming = false;
   if(!N.prep) N.genTok++;
   setWaiting(false);
   if(synth) synth.cancel();
@@ -771,7 +787,7 @@ function setEngine(e){
   document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.engine === e ? 'true' : 'false'));
   document.querySelectorAll('[data-panel]').forEach(p=>p.hidden = p.dataset.panel !== e);
   $('#prepBox').hidden = !(e === 'natural' || e === 'mivoz');
-  $('#blackBtn').hidden = !doc || isAudioDoc() || neural();
+  $('#blackBtn').hidden = !doc || isAudioDoc();
   const tam = N.M ? N.M.tamanoVoz() : (navigator.gpu ? 326 : 92);
   $('#dlNote').textContent = e === 'sistema' ? '' :
     `La primera vez descarga la voz (unos ${tam + (e==='mivoz' ? 70 : 0)} MB; conviene Wi-Fi). Después funciona sin internet.`;
@@ -930,7 +946,9 @@ async function readZipEntries(file){
     const method = cd.getUint16(o+10,true), size = cd.getUint32(o+20,true);
     const nl = cd.getUint16(o+28,true), xl = cd.getUint16(o+30,true), cl = cd.getUint16(o+32,true), lho = cd.getUint32(o+42,true);
     const name = new TextDecoder().decode(new Uint8Array(cd.buffer, o+46, nl));
-    out[name] = {method, size, lho, file, get blob(){ return datosZip(this); }};
+    const ent = {method, size, lho, file, get blob(){ return datosZip(this); }};
+    out[name] = ent;
+    if(name.startsWith('/')) out[name.slice(1)] = ent;
     o += 46 + nl + xl + cl;
   }
   return out;
@@ -962,12 +980,14 @@ async function leerZip(ent){
 
 async function importZip(file){
   const z = await readZipEntries(file);
-  const j = z['lectora.json'], a = z['audio.m4a'];
-  if(!j || !a || j.method !== 0 || a.method !== 0) throw new Error(`«${file.name}» no viene del Estudio Lectora (o se volvió a comprimir).`);
-  const meta = JSON.parse(await j.blob.text());
+  const j = z['lectora.json'] || z['/lectora.json'], a = z['audio.m4a'] || z['/audio.m4a'];
+  if(!j || !a) throw new Error(`«${file.name}» no viene del Estudio Lectora.`);
+  const metaTxt = j.method === 0 ? await j.blob.text() : new TextDecoder().decode(await leerZip(j));
+  const meta = JSON.parse(metaTxt);
   const key = 'audio|' + file.name + '|' + file.size;
   showStatus(`${file.name}: guardando el audio…`);
-  const blob = new Blob([await a.blob.slice()], {type:'audio/mp4'});
+  const audioData = a.method === 0 ? await a.blob.slice() : await leerZip(a);
+  const blob = new Blob([audioData], {type:'audio/mp4'});
   if(!(await kv.put('audio', key, blob) !== null)) throw new Error('No hay espacio para guardar el audio en el teléfono.');
   const d = {key, kind:'audio', name:meta.name, voice:meta.voice, duration:meta.duration, pages:meta.pages};
   await dbPut(d); addToLibrary(d);
