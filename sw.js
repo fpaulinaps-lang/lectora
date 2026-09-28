@@ -1,6 +1,6 @@
 // Guarda la app en el teléfono para que abra sin internet, y la aísla (COOP/COEP)
 // para que la voz pueda usar varios núcleos del procesador.
-const CACHE = 'lectora-v6';                 // la app: se renueva con cada versión
+const CACHE = 'lectora-v7';                 // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo (motor de voz, etc.): sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'voz/motor.js', 'voz/es-fonemas.js', 'voz/nucleo.js', 'voz/voz-worker.js', 'vendor/phonemizer.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
@@ -9,7 +9,8 @@ const GRANDES = /\.(onnx|f16|bin)$/;
 const ESPERA_RED = 4000;                    // con mala señal, no esperar más que esto antes de usar la copia guardada
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache:'reload' = pedir los archivos al servidor, no a la memoria del navegador (GitHub la deja 10 min)
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, {cache: 'reload'})))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   // Solo se borran las versiones viejas de la app; el motor de voz y los modelos se conservan.
@@ -40,7 +41,7 @@ function aislar(r){
 // Primero la red, para que las mejoras lleguen; sin conexión (o si tarda demasiado), la copia guardada.
 async function redPrimero(req, clave, cacheNombre){
   const guardada = caches.match(clave);
-  const red = fetch(req).then(r => {
+  const red = fetch(req, {cache: 'no-cache'}).then(r => {
     if (r.ok) { const copia = r.clone(); caches.open(cacheNombre).then(c => c.put(clave, copia)); }
     return r;
   });
