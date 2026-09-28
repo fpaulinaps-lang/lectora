@@ -265,6 +265,7 @@ function setDoc(d, pos){
   updateVoiceBtn();
   renderPage(flat.length ? flat[idx].p : 0);
   updateMeta(); mediaMeta();
+  precalentar();
 }
 
 function renderPage(p){
@@ -400,16 +401,17 @@ setInterval(()=>{
 // Voces del sistema: fuera las voces "de broma" de Apple (cantan o suenan a efectos) y las Eloquence, muy robóticas.
 const NOVEDAD = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Jester|Organ|Pipe Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Kathy|Ralph|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley)\b/i;
 const esNovedad = v => NOVEDAD.test(v.name) || /speech\.synthesis\.voice\.|eloquence/i.test(v.voiceURI || '');
-const isGood = v => /premium|enhanced|mejorad|natural|neural|online|wavenet|studio|siri/i.test(v.name + ' ' + v.voiceURI);
+const isGood = v => /premium|enhanced|mejorad|natural|neural|wavenet|studio/i.test(v.name + ' ' + v.voiceURI);
 const PREFERIDAS = /^(Mónica|Monica|Paulina|Marisol|Jorge|Juan|Diego|Francisca|Samantha|Ava|Zoe|Evan|Allison|Susan|Nathan|Google)/i;
 function score(v, lang){
   let s = 0;
   if(v.lang.toLowerCase().startsWith(lang)) s += 100;
-  if(isGood(v)) s += 50;
+  if(isGood(v)) s += 30;
   if(PREFERIDAS.test(v.name)) s += 25;
   if(lang==='es'){ if(/es[-_]CL/i.test(v.lang)) s += 6; else if(/es[-_](MX|US|419)/i.test(v.lang)) s += 4; }
   if(lang==='en' && /en[-_]US/i.test(v.lang)) s += 4;
-  if(v.localService) s += 1;
+  if(v.localService) s += 40;
+  if(/network|online|cloud/i.test(v.name + ' ' + v.voiceURI)) s -= 30;
   return s;
 }
 function pickVoice(lang){
@@ -489,8 +491,8 @@ const PAUSA = 0.28, PAUSA_PAG = 0.7, ADELANTE = 6;
 const NAT = {es: store.get('nat:es', 'ef_dora'), en: store.get('nat:en', 'af_heart')};
 const N = {
   M: null, listos: new Map(), enDisco: new Set(), enCurso: new Set(), esperas: new Map(),
-  genTok: 0, playTok: 0, prep: false, base: null, tgt: null, clipUrl: null, velocidadReal: null,
-  reset(){ this.genTok++; this.playTok++; this.listos.clear(); this.enDisco.clear(); this.enCurso.clear(); this.prep = false; this.esperas.forEach(ws=>ws.forEach(w=>w(null))); this.esperas.clear(); this.discoCargado = null; this.discoP = null; },
+  genTok: 0, playTok: 0, prep: false, precalentando: false, base: null, tgt: null, clipUrl: null, velocidadReal: null,
+  reset(){ this.genTok++; this.playTok++; this.listos.clear(); this.enDisco.clear(); this.enCurso.clear(); this.prep = false; this.precalentando = false; this.esperas.forEach(ws=>ws.forEach(w=>w(null))); this.esperas.clear(); this.discoCargado = null; this.discoP = null; },
 };
 function firma(){
   return engine === 'mivoz' ? 'mv' + (store.get('vozHash','') || '') : 'nat-' + NAT.es + '-' + NAT.en;
@@ -505,7 +507,7 @@ function deMu(u){ const o = new Float32Array(u.length); for(let i=0;i<u.length;i
 
 function progreso(msg, n, t){
   if(t > 1000) showStatus(`${msg}: ${Math.round(n/1e6)} de ${Math.round(t/1e6)} MB. Solo pasa la primera vez; usa Wi-Fi.`, null, n/t);
-  else showStatus(msg + '…', null, null);
+  else if(playing || N.prep) showStatus(msg + '…', null, null);
 }
 async function cargarNeural(){
   if(!N.M) N.M = await import('./voz/motor.js');
@@ -522,8 +524,8 @@ async function cargarNeural(){
   }
   hideStatus();
 }
-const FRASE_BASE = {es:'La lectura en voz alta cambia la manera en que entendemos un texto, porque cada frase tiene su ritmo y sus pausas.',
-                    en:'Reading aloud changes the way we understand a text, because every sentence has its own rhythm and pauses.'};
+const FRASE_BASE = {es:'La lectura en voz alta tiene su propio ritmo.',
+                    en:'Reading aloud gives every word its own rhythm.'};
 async function prepararMiVoz(){
   const h = store.get('vozSE', null);
   if(!h) throw new Error('Primero graba tu voz en el botón Voz › Mi voz.');
@@ -536,9 +538,13 @@ async function prepararMiVoz(){
   // Elige la voz natural cuyo timbre se parece más al tuyo: la conversión queda más limpia.
   showStatus('Ajustando la voz a tu timbre…');
   const base = {};
+  const candidatos = {
+    es: N.M.VOCES.es,
+    en: N.M.VOCES.en.filter(v => v.id === 'af_heart' || v.id === 'am_michael')
+  };
   for(const lang of ['es','en']){
     let mejor = null;
-    for(const v of N.M.VOCES[lang]){
+    for(const v of candidatos[lang]){
       const se = await N.M.huellaDe(await N.M.hablar(FRASE_BASE[lang], lang, v.id), N.M.SR);
       const sim = N.M.parecido(se, N.tgt);
       if(!mejor || sim > mejor.sim) mejor = {id:v.id, se, sim};
@@ -547,6 +553,7 @@ async function prepararMiVoz(){
   }
   N.base = base;
   store.set('vozBase', {hash:store.get('vozHash'), es:{id:base.es.id, se:Array.from(base.es.se)}, en:{id:base.en.id, se:Array.from(base.en.se)}});
+  hideStatus();
 }
 
 // Qué frases de este libro (con esta voz) ya están generadas y guardadas.
@@ -563,7 +570,8 @@ function cargarDisco(){
 function siguienteFaltante(){
   const falta = j => !N.listos.has(j) && !N.enDisco.has(j) && !N.enCurso.has(j);
   // primero lo que viene justo después de la frase actual
-  const fin = Math.min(flat.length, idx + ADELANTE + 1);
+  const precal = !playing && !N.prep && N.precalentando;
+  const fin = Math.min(flat.length, idx + (precal ? 2 : ADELANTE + 1));
   for(let j = idx; j < fin; j++) if(falta(j)) return j;
   if(N.prep){   // preparando: el resto del libro, y luego lo que quedó antes de la frase actual
     for(let j = fin; j < flat.length; j++) if(falta(j)) return j;
@@ -582,10 +590,14 @@ async function generador(){
   try{
     await cargarNeural();
     await cargarDisco();
-    while(my === N.genTok && ((playing && neural()) || N.prep)){
+    while(my === N.genTok && ((playing && neural()) || N.prep || N.precalentando)){
       const i = siguienteFaltante();
       if(i < 0){
         if(N.prep && !flat.some((_, j) => !N.enDisco.has(j))){ terminarPrep(); break; }
+        if(!playing && !N.prep){
+          N.precalentando = false;
+          break;
+        }
         await new Promise(r=>setTimeout(r, 400)); continue;
       }
       N.enCurso.add(i);
@@ -627,13 +639,14 @@ async function generador(){
 function asegurarGenerador(){
   if(N.vivo) return;
   N.vivo = true;
-  generador().finally(()=>{ N.vivo = false; if(playing && neural() || N.prep) setTimeout(asegurarGenerador, 50); });
+  generador().finally(()=>{ N.vivo = false; if((playing && neural()) || N.prep || N.precalentando) setTimeout(asegurarGenerador, 50); });
 }
 async function clipDe(i){
   if(N.listos.has(i)) return N.listos.get(i);
   await cargarDisco();
   const u8 = N.enDisco.has(i) ? await kv.get('pistas', clave(i)) : null;
   if(u8){ const a = deMu(u8); N.listos.set(i, a); return a; }
+  asegurarGenerador();
   return await new Promise(res=>{ if(!N.esperas.has(i)) N.esperas.set(i, []); N.esperas.get(i).push(res); });
 }
 async function reproducirClip(i){
@@ -641,7 +654,13 @@ async function reproducirClip(i){
   idx = i; showSentence(true); save();
   if(!N.M) N.M = await import('./voz/motor.js');
   let a = N.listos.get(i);
-  if(!a){ setWaiting(true); a = await clipDe(i); setWaiting(false); }
+  if(!a){
+    setWaiting(true);
+    showStatus('Iniciando lectura…');
+    a = await clipDe(i);
+    hideStatus();
+    setWaiting(false);
+  }
   if(my !== N.playTok || !playing || !a) return;
   const pausa = (flat[i+1] && flat[i+1].p !== flat[i].p) ? PAUSA_PAG : PAUSA;
   const conPausa = new Float32Array(a.length + Math.round(pausa * N.M.SR)); conPausa.set(a);
@@ -658,6 +677,24 @@ async function reproducirClip(i){
     store.set('avisoLento', true);
     showStatus('Tu teléfono genera esta voz un poco más lento de lo que la lee, así que a ratos va a pausar. Para evitarlo, usa «Preparar libro» en el botón Voz.');
   }
+}
+let precalTimer = null;
+function precalentar(){
+  clearTimeout(precalTimer);
+  if(!doc || !flat.length || playing || N.prep || !neural() || isAudioDoc()) return;
+  if(engine === 'mivoz' && !store.get('vozSE')) return;
+  precalTimer = setTimeout(async ()=>{
+    if(playing || N.prep || !neural() || isAudioDoc()) return;
+    if(engine === 'mivoz' && !store.get('vozSE')) return;
+    await cargarDisco();
+    const falta = j => !N.listos.has(j) && !N.enDisco.has(j);
+    const fin = Math.min(flat.length, idx + 2);
+    let hayFalta = false;
+    for(let j = idx; j < fin; j++){ if(falta(j)){ hayFalta = true; break; } }
+    if(!hayFalta) return;
+    N.precalentando = true;
+    asegurarGenerador();
+  }, 350);
 }
 audioClip.addEventListener('ended', ()=>{
   if(N.priming) return;
@@ -712,6 +749,8 @@ async function play(){
 function stop(){
   const was = playing;
   playing = false; token++; N.playTok++; N.priming = false;
+  N.precalentando = false;
+  clearTimeout(precalTimer);
   if(!N.prep) N.genTok++;
   setWaiting(false);
   if(synth) synth.cancel();
@@ -729,7 +768,17 @@ function jump(i){
     if(zipUrl) audioZip.currentTime = flat[idx].s; else store.set('time:'+doc.key, flat[idx].s);
     showSentence(true, true); save(); return;
   }
-  if(neural()){ if(playing) reproducirClip(idx); else { showSentence(true, true); save(); } return; }
+  if(neural()){
+    if(playing){
+      N.genTok++;
+      asegurarGenerador();
+      reproducirClip(idx);
+    } else {
+      showSentence(true, true); save();
+      precalentar();
+    }
+    return;
+  }
   if(playing) speak(); else { showSentence(true, true); save(); }
 }
 
@@ -779,7 +828,7 @@ function fillNatural(){
 }
 function reiniciarNeural(){
   const era = playing; stop(); N.reset();
-  if(era) play();
+  if(era) play(); else precalentar();
 }
 function setEngine(e){
   const antes = engine;
@@ -792,7 +841,7 @@ function setEngine(e){
   $('#dlNote').textContent = e === 'sistema' ? '' :
     `La primera vez descarga la voz (unos ${tam + (e==='mivoz' ? 70 : 0)} MB; conviene Wi-Fi). Después funciona sin internet.`;
   updateVoiceBtn(); refreshRec();
-  if(antes !== e && doc){ const era = playing; stop(); N.reset(); if(era) play(); }
+  if(antes !== e && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentar(); }
 }
 document.querySelectorAll('.seg button').forEach(b=>b.onclick = ()=>setEngine(b.dataset.engine));
 
@@ -896,8 +945,12 @@ $('#recBtn').onclick = async ()=>{
       store.set('vozSE', Array.from(se));
       store.set('vozHash', Date.now().toString(36));
       store.del('vozBase');
+      showStatus('Ajustando la voz a tu timbre…');
+      await N.M.prepararVoz(progreso);
+      await N.M.prepararConversor(progreso);
+      await prepararMiVoz();
       hideStatus();
-      if(engine === 'mivoz' && doc){ const era = playing; stop(); N.reset(); if(era) play(); }
+      if(engine === 'mivoz' && doc){ const era = playing; stop(); N.reset(); if(era) play(); else precalentar(); }
     }catch(e){ showStatus(e.message || 'No pude procesar la grabación. Intenta otra vez.', 'err'); }
     finally{ ctx.close(); $('#recBtn').disabled = false; refreshRec(); }
   };
