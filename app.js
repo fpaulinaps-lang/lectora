@@ -305,7 +305,7 @@ function setDoc(d, pos){
   store.set('last', d.key);
   if(zipUrl){ URL.revokeObjectURL(zipUrl); zipUrl = null; audioZip.removeAttribute('src'); audioZip.load(); }
   MV.pref = null; MV.pag = null; MV.sig = null;
-  if(MV.prep){ MV.prep = false; MV.prepTok++; }
+  if(MV.prep){ MV.prep = false; MV.prepTok++; store.del('prepActiva'); }
   $('#blackBtn').hidden = isAudioDoc() || modo === 'mivoz';
   updateVoiceBtn();
   renderPage(flat.length ? flat[idx].p : 0);
@@ -697,47 +697,95 @@ function avanceMV(msg, n, t){
 }
 
 /* ---------- Preparar el libro ---------- */
+// Sin tarjeta gráfica, cuántos procesos convienen depende del teléfono: más núcleos ayudan, pero cada
+// proceso carga sus modelos (~200 MB) y con poca memoria todo se vuelve más lento (o el iPhone cierra la app).
+// Por eso se prueba: parte con [voz natural, timbre] = [1,1], mide, prueba [2,1] y [2,2], y se queda con
+// la más rápida. El resultado se recuerda en este teléfono («mvProcesos»).
+const PRUEBAS = [[1, 1], [2, 1], [2, 2]];
+const LETRAS_POR_PRUEBA = 1500;          // ~1,5 minutos de lectura por prueba
 async function prepararMV(){
-  if(MV.prep){ MV.prep = false; MV.prepTok++; if(!playing) holdScreen(false); actualizarMV(); return; }
+  if(MV.prep){ MV.prep = false; MV.prepTok++; store.del('prepActiva'); if(!playing) holdScreen(false); actualizarMV(); return; }
   if(!store.get('vozSE')){ $('#mvEstado').textContent = 'Primero graba tu voz.'; return; }
   const tok = ++MV.prepTok, d = doc;
   MV.prep = true; holdScreen(true); actualizarMV();
+  if(document.visibilityState === 'visible') store.set('prepActiva', {key: d.key});
   try{
     await motorMV(avanceMV);
+    const conGPU = MV.M.usaGPU();
+    const elegido = store.get('mvProcesos', null);
+    let plan = conGPU || elegido ? null : PRUEBAS.slice(), resultados = [];
+    let actual = conGPU ? [1, 1] : (elegido || PRUEBAS[0]);
+    let cap = await MV.M.ajustar(...actual);
     $('#mvDescarga').textContent = '';
     await discoMV();
     // desde donde vas hasta el final, y después lo de antes
     const orden = [];
     for(let i = idx; i < flat.length; i++) if(!MV.enDisco.has(i)) orden.push(i);
     for(let i = 0; i < idx; i++) if(!MV.enDisco.has(i)) orden.push(i);
-    const t0 = performance.now(); let hechas = 0, letras = 0;
+    const t0 = performance.now(); let letras = 0, fallo = null;
     const letrasTotal = orden.reduce((x, i) => x + flat[i].t.length, 0);
-    let cola = Promise.resolve(), pendientes = 0;
+    let fase = {t: null, letras: 0};          // medición de la prueba en curso (desde la primera frase lista)
+    const enVuelo = new Set();
     for(const i of orden){
-      if(tok !== MV.prepTok || doc !== d) break;
-      const s = flat[i], b = MV.base[s.l] || MV.base.es;
-      const crudo = MV.M.recortar(await MV.M.hablar(s.t, s.l, b.id, 1));
-      pendientes++;
-      // mientras se pone tu timbre a esta frase, la siguiente ya se está generando
-      cola = cola.then(async ()=>{
+      if(tok !== MV.prepTok || doc !== d || fallo) break;
+      // fin de una prueba: medir, y pasar a la siguiente configuración o quedarse con la mejor
+      if(plan && fase.t && fase.letras >= LETRAS_POR_PRUEBA){
+        await Promise.all(enVuelo);
+        resultados.push({conf: actual, rapidez: fase.letras / (performance.now() - fase.t)});
+        const k = resultados.length;
+        const mejor = resultados.reduce((a, b) => b.rapidez > a.rapidez ? b : a);
+        const sigue = k < PRUEBAS.length && resultados[k - 1] === mejor;   // si la última no mejoró, no vale la pena seguir
+        actual = sigue ? PRUEBAS[k] : mejor.conf;
+        if(!sigue){ plan = null; store.set('mvProcesos', actual); }
+        $('#mvDescarga').textContent = sigue ? 'Probando más procesos a la vez para ir más rápido…' : '';
+        cap = await MV.M.ajustar(...actual);
+        $('#mvDescarga').textContent = '';
+        fase = {t: null, letras: 0};
+      }
+      const job = (async ()=>{
+        const s = flat[i], b = MV.base[s.l] || MV.base.es;
+        const crudo = MV.M.recortar(await MV.M.hablar(s.t, s.l, b.id, 1));
         if(tok !== MV.prepTok || doc !== d) return;
         const a = await MV.M.convertir(crudo, b.se, MV.tgt);
+        if(tok !== MV.prepTok || doc !== d) return;
         await kv.put('pistas', claveMV(i), empacar(a));
-        MV.enDisco.add(i); hechas++; letras += s.t.length;
-        const seg = (performance.now() - t0) / 1000;
-        MV.falta = letras ? seg / letras * (letrasTotal - letras) : null;
+        MV.enDisco.add(i); letras += s.t.length;
+        if(fase.t == null) fase.t = performance.now(); else fase.letras += s.t.length;
+        MV.falta = letras ? (performance.now() - t0) / 1000 / letras * (letrasTotal - letras) : null;
         actualizarMV();
-      }).finally(()=>{ pendientes--; });
-      if(pendientes >= 2) await cola;
+      })().catch(e => { fallo = e; });
+      enVuelo.add(job); job.finally(() => enVuelo.delete(job));
+      if(enVuelo.size >= cap.voz + cap.timbre) await Promise.race(enVuelo);
     }
-    await cola;
+    await Promise.all(enVuelo);
+    // si el libro se terminó en medio de las pruebas, se recuerda la mejor medida hasta ahora
+    if(plan && fase.t && fase.letras > 0) resultados.push({conf: actual, rapidez: fase.letras / (performance.now() - fase.t)});
+    if(plan && resultados.length > 1) store.set('mvProcesos', resultados.reduce((a, b) => b.rapidez > a.rapidez ? b : a).conf);
+    if(fallo) throw fallo;
   }catch(e){ $('#mvEstado').textContent = e.message || String(e); }
   finally{
-    if(tok === MV.prepTok){ MV.prep = false; MV.falta = null; }
+    if(tok === MV.prepTok){ MV.prep = false; MV.falta = null; store.del('prepActiva'); }
     if(!playing) holdScreen(false);
     actualizarMV();
   }
 }
+// Si la app se cierra mientras prepara (el iPhone la cierra si usa mucha memoria), la marca queda puesta.
+// Mientras la app está en segundo plano no se marca: ahí el iPhone la puede cerrar sin que sea un problema.
+document.addEventListener('visibilitychange', () => {
+  if(!MV.prep || !doc) return;
+  if(document.visibilityState === 'visible') store.set('prepActiva', {key: doc.key}); else store.del('prepActiva');
+});
+async function retomarPreparacion(){
+  const m = store.get('prepActiva');
+  if(!m) return;
+  store.del('prepActiva');
+  if(!doc || doc.key !== m.key || !store.get('vozSE')) return;
+  store.set('mvProcesos', [1, 1]);
+  if(modo !== 'mivoz') setModo('mivoz');
+  showStatus('LectorLibre se cerró mientras preparaba tu voz (seguramente por falta de memoria). Sigo preparando, con menos procesos a la vez.');
+  prepararMV();
+}
+
 function actualizarMV(){
   const tiene = !!store.get('vozSE');
   $('#recEmpty').hidden = tiene; $('#recDone').hidden = !tiene;
@@ -1365,7 +1413,7 @@ setRate(rate);
     if(d){ setDoc(d, store.get('pos:'+d.key, 0)); showReader(); return; }
   }
   showLibrary();
-})();
+})().then(()=> retomarPreparacion());
 window.lectora = {estado: () => ({idx, playing})};
 
 

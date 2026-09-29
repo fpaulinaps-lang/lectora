@@ -208,8 +208,42 @@ export async function hablar(texto, lang, vozId, velocidad = 1){
 }
 function unir(ts){ const n = ts.reduce((a, t) => a + t.length, 0); const o = new Float32Array(n); let k = 0; for(const t of ts){ o.set(t, k); k += t.length; } return o; }
 
+/* ---------- más procesos para preparar más rápido (solo sin tarjeta gráfica) ---------- */
+// Un proceso de un hilo por núcleo: con 2 de voz natural y 2 de timbre se prepara cerca del doble de rápido
+// que con 1 y 1. Cada proceso carga sus propios modelos (unos 200 MB de memoria cada uno).
+export async function ampliar(nVoz, nTimbre){
+  const pr = await procesos();
+  if(pr.gpu) return {voz: 1, timbre: 1};
+  await prepararVoz(); await prepararConversor();
+  pr.convs = pr.convs || [pr.conv];
+  while(pr.voz.filter(x => x.kokoro).length < nVoz){
+    const q = crearProceso(new URL('./voz-worker-cpu.js', import.meta.url)); await q.listo; pr.todos.push(q);
+    await cargarKokoroEn(q, ()=>{}); pr.voz.push(q);
+  }
+  while(pr.convs.length < nTimbre){
+    const q = crearProceso(new URL('./voz-worker-cpu.js', import.meta.url)); await q.listo; pr.todos.push(q);
+    await cargarConvEn(q); pr.convs.push(q);
+  }
+  return {voz: pr.voz.filter(x => x.kokoro).length, timbre: pr.convs.length};
+}
+// Deja exactamente nVoz procesos de voz natural y nTimbre de timbre (cierra los que sobran; llamar sin trabajo pendiente).
+export async function ajustar(nVoz, nTimbre){
+  const pr = await procesos();
+  if(pr.gpu) return {voz: 1, timbre: 1};
+  pr.convs = pr.convs || [pr.conv];
+  const cerrar = q => { q.terminar(); pr.todos = pr.todos.filter(x => x !== q); };
+  while(pr.voz.length > Math.max(1, nVoz)){ const q = pr.voz.pop(); if(!pr.convs.includes(q)) cerrar(q); else q.kokoro = false; }
+  while(pr.convs.length > Math.max(1, nTimbre)){ const q = pr.convs.pop(); if(!pr.voz.includes(q) && q !== pr.conv) cerrar(q); }
+  return ampliar(nVoz, nTimbre);
+}
+
 /* ---------- tu voz ---------- */
-let huellaLista = null, convListo = null;
+let huellaLista = null, convListo = null, convBytes = null;
+async function cargarConvEn(q){
+  const [a, aP, b, bP, c, cP] = convBytes, cp = u8 => u8.slice().buffer;   // copias: los originales se reusan
+  await q.llamar('cargarConversor', {a: cp(a), aPesos: expandir(aP), b: cp(b), bPesos: expandir(bP), c: cp(c), cPesos: expandir(cP)});
+  q.conversor = true;
+}
 export function prepararHuella(){
   if(!huellaLista) huellaLista = (async ()=>{
     const h = await traer(new URL('./huella.onnx', import.meta.url).href);
@@ -228,11 +262,9 @@ export function prepararConversor(alAvanzar = ()=>{}){
       traer(base + p + '.f16', (n)=>{ hecho[p] = n; alAvanzar('Descargando el conversor de tu voz', Object.values(hecho).reduce((x, y) => x + y, 0), total); }),
     ]));
     alAvanzar('Preparando tu voz', 1, 1);
-    const [a, aP, b, bP, c, cP] = bajados;
+    convBytes = bajados;                      // se guardan para cargar el conversor en más procesos (ampliar)
     const pr = await procesos();
-    const partes = {a: copia(a), aPesos: expandir(aP), b: copia(b), bPesos: expandir(bP), c: copia(c), cPesos: expandir(cP)};
-    await pr.conv.llamar('cargarConversor', partes);
-    pr.conv.conversor = true;
+    await cargarConvEn(pr.conv);
   })();
   convListo.catch(()=>{ convListo = null; });
   return convListo;
@@ -245,7 +277,10 @@ export async function huellaDe(audio, sr){
 // El cambio de frecuencia también se hace en el núcleo, para no trabar la pantalla.
 export async function convertir(audio24, src, tgt){
   await prepararConversor();
-  return await (await procesos()).conv.llamar('convertir', Float32Array.from(audio24), Float32Array.from(src), Float32Array.from(tgt), SR);
+  const pr = await procesos();
+  // el proceso de timbre menos ocupado
+  const q = (pr.convs || [pr.conv]).filter(x => x.conversor).sort((x, y) => x.carga - y.carga)[0] || pr.conv;
+  return await q.llamar('convertir', Float32Array.from(audio24), Float32Array.from(src), Float32Array.from(tgt), SR);
 }
 export function parecido(a, b){
   let d = 0, na = 0, nb = 0;
