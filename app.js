@@ -200,6 +200,7 @@ function detect(s, fallback){
 /* ---------- Estado ---------- */
 let doc = null, flat = [], pageStarts = [], shownPage = 0;
 let idx = 0, playing = false, rate = store.get('rate',1), wake = null;
+let modo = store.get('modo', 'telefono');                 // voz del teléfono o «Mi voz» (telefono | mivoz)
 const isAudioDoc = () => doc && doc.kind === 'audio';
 
 /* ---------- Biblioteca ---------- */
@@ -303,7 +304,9 @@ function setDoc(d, pos){
   $('#pageInput').max = d.pages.length;
   store.set('last', d.key);
   if(zipUrl){ URL.revokeObjectURL(zipUrl); zipUrl = null; audioZip.removeAttribute('src'); audioZip.load(); }
-  $('#blackBtn').hidden = isAudioDoc();
+  MV.pref = null; MV.pag = null; MV.sig = null;
+  if(MV.prep){ MV.prep = false; MV.prepTok++; }
+  $('#blackBtn').hidden = isAudioDoc() || modo === 'mivoz';
   updateVoiceBtn();
   renderPage(flat.length ? flat[idx].p : 0);
   updateMeta(); mediaMeta();
@@ -587,6 +590,314 @@ audioZip.addEventListener('ended', ()=>{ playing = false; setPlayIcon(); store.s
 audioZip.addEventListener('pause', ()=>{ if(isAudioDoc() && playing){ playing = false; setPlayIcon(); save(true); } });
 audioZip.addEventListener('play', ()=>{ if(isAudioDoc() && !playing){ playing = true; setPlayIcon(); } });
 
+
+/* ================= Mi voz (preparada de antemano) ================= */
+// El teléfono genera la voz natural (Kokoro) y le pone tu timbre (OpenVoice) frase por frase, de antemano,
+// y guarda cada frase. Al escuchar se arma una página entera como un solo audio: suena de corrido y con la
+// pantalla bloqueada. (Generar en vivo no alcanza en iPhone sin tarjeta gráfica: por eso se prepara antes.)
+const esMiVoz = () => modo === 'mivoz' && doc && !isAudioDoc();
+const SRV = 24000;
+const audioMV = new Audio(); audioMV.preload = 'auto';
+const MV = {M: null, configurado: false, tgt: null, base: null, enDisco: new Set(), pref: null, prep: false, prepTok: 0,
+            pag: null, url: null, sig: null, guardado: 0};
+
+// Frases guardadas en 12 bits (1,5 bytes por muestra, ~130 MB por hora de lectura).
+function empacar(a){
+  const n = a.length, o = new Uint8Array(Math.ceil(n / 2) * 3);
+  let pico = 0; for(let i = 0; i < n; i++){ const v = Math.abs(a[i]); if(v > pico) pico = v; }
+  const g = pico > 0.98 ? 0.98 / pico : 1;
+  const q = i => i < n ? (Math.max(-2048, Math.min(2047, Math.round(a[i] * g * 2047))) + 2048) : 2048;
+  for(let i = 0, k = 0; i < n; i += 2, k += 3){
+    const x = q(i), y = q(i + 1);
+    o[k] = x & 255; o[k + 1] = (x >> 8) | ((y & 15) << 4); o[k + 2] = y >> 4;
+  }
+  return {f: 'p12', n, d: o};
+}
+function desempacar(v){
+  if(!v || !v.d) return null;
+  const {n, d} = v, a = new Float32Array(n);
+  for(let i = 0, k = 0; i < n; i += 2, k += 3){
+    a[i] = ((d[k] | ((d[k + 1] & 15) << 8)) - 2048) / 2047;
+    if(i + 1 < n) a[i + 1] = (((d[k + 1] >> 4) | (d[k + 2] << 4)) - 2048) / 2047;
+  }
+  return a;
+}
+function wav16(a){
+  const b = new ArrayBuffer(44 + a.length * 2), v = new DataView(b);
+  const w = (o, t) => { for(let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + a.length * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, SRV, true); v.setUint32(28, SRV * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, a.length * 2, true);
+  for(let i = 0; i < a.length; i++){ const x = Math.max(-1, Math.min(1, a[i])); v.setInt16(44 + i * 2, x < 0 ? x * 32768 : x * 32767, true); }
+  return new Blob([b], {type: 'audio/wav'});
+}
+// Pausa después de cada frase, como al leer en voz alta.
+function pausaTras(i){
+  const s = flat[i], sig = flat[i + 1];
+  if(!s || !sig) return 0.3;
+  if(sig.p !== s.p) return 0.7;
+  if(s.h || isHeading(s.t) || sig.h || isHeading(sig.t) || sig.np) return 0.55;
+  const fin = s.t.trim().replace(/["'»”’)\]]+$/, '').slice(-1);
+  if(/[.!?…]/.test(fin)) return 0.38;
+  if(/[:;]/.test(fin)) return 0.28;
+  return 0.16;
+}
+
+function firmaMV(){ const b = store.get('vozBase'); return 'mv' + store.get('vozHash', '') + '-' + (b ? b.es.id + '.' + b.en.id : ''); }
+const claveMV = i => `${doc.key}|${firmaMV()}|${i}`;
+async function discoMV(){
+  const pref = `${doc.key}|${firmaMV()}|`;
+  if(MV.pref === pref) return;
+  MV.pref = pref; MV.enDisco = new Set();
+  const ks = await kv.keys('pistas', pref) || [];
+  if(MV.pref === pref) ks.forEach(k => MV.enDisco.add(+k.slice(pref.length)));
+}
+const frasesDePagina = p => { const a = pageStarts[p], b = p + 1 < pageStarts.length ? pageStarts[p + 1] : flat.length; return Array.from({length: b - a}, (_, k) => a + k); };
+const paginaLista = p => { const f = frasesDePagina(p); return f.length > 0 && f.every(i => MV.enDisco.has(i)); };
+
+// Carga el motor (la primera vez descarga unos 180 MB) y elige la voz natural más parecida a la tuya.
+async function motorMV(avance = ()=>{}){
+  if(!MV.M) MV.M = await import('./voz/motor.js');
+  if(!MV.configurado){
+    MV.configurado = true;
+    let gpu = false;   // «lectora:sinGPU» simula un iPhone sin tarjeta gráfica para probar
+    try{ gpu = !store.get('sinGPU', false) && !!(navigator.gpu && await navigator.gpu.requestAdapter()); }catch(e){}
+    MV.M.configurar({gpu});
+  }
+  await MV.M.prepararVoz(avance);
+  await MV.M.prepararConversor(avance);
+  await elegirBase();
+}
+async function elegirBase(){
+  const h = store.get('vozSE'); if(!h) throw new Error('Primero graba tu voz.');
+  MV.tgt = Float32Array.from(h);
+  const g = store.get('vozBase');
+  if(g && g.hash === store.get('vozHash')){
+    MV.base = {es: {id: g.es.id, se: Float32Array.from(g.es.se)}, en: {id: g.en.id, se: Float32Array.from(g.en.se)}};
+    return;
+  }
+  // huellas de las voces naturales calculadas de antemano: elegir es solo comparar números
+  const huellas = await (await fetch('voz/huellas-base.json')).json();
+  const cands = {es: ['ef_dora', 'em_alex'], en: ['af_heart', 'af_bella', 'am_michael', 'am_fenrir']};
+  const base = {};
+  for(const lang of ['es', 'en']){
+    let mejor = null;
+    for(const id of cands[lang]){
+      const se = Float32Array.from(huellas[id]), sim = MV.M.parecido(se, MV.tgt);
+      if(!mejor || sim > mejor.sim) mejor = {id, se, sim};
+    }
+    base[lang] = mejor;
+  }
+  MV.base = base;
+  store.set('vozBase', {hash: store.get('vozHash'), es: {id: base.es.id, se: Array.from(base.es.se)}, en: {id: base.en.id, se: Array.from(base.en.se)}});
+  MV.pref = null;
+}
+function avanceMV(msg, n, t){
+  $('#mvDescarga').textContent = t > 1000 ? `${msg}: ${Math.round(n / 1e6)} de ${Math.round(t / 1e6)} MB (solo la primera vez; usa Wi-Fi).` : msg + '…';
+}
+
+/* ---------- Preparar el libro ---------- */
+async function prepararMV(){
+  if(MV.prep){ MV.prep = false; MV.prepTok++; if(!playing) holdScreen(false); actualizarMV(); return; }
+  if(!store.get('vozSE')){ $('#mvEstado').textContent = 'Primero graba tu voz.'; return; }
+  const tok = ++MV.prepTok, d = doc;
+  MV.prep = true; holdScreen(true); actualizarMV();
+  try{
+    await motorMV(avanceMV);
+    $('#mvDescarga').textContent = '';
+    await discoMV();
+    // desde donde vas hasta el final, y después lo de antes
+    const orden = [];
+    for(let i = idx; i < flat.length; i++) if(!MV.enDisco.has(i)) orden.push(i);
+    for(let i = 0; i < idx; i++) if(!MV.enDisco.has(i)) orden.push(i);
+    const t0 = performance.now(); let hechas = 0, letras = 0;
+    const letrasTotal = orden.reduce((x, i) => x + flat[i].t.length, 0);
+    let cola = Promise.resolve(), pendientes = 0;
+    for(const i of orden){
+      if(tok !== MV.prepTok || doc !== d) break;
+      const s = flat[i], b = MV.base[s.l] || MV.base.es;
+      const crudo = MV.M.recortar(await MV.M.hablar(s.t, s.l, b.id, 1));
+      pendientes++;
+      // mientras se pone tu timbre a esta frase, la siguiente ya se está generando
+      cola = cola.then(async ()=>{
+        if(tok !== MV.prepTok || doc !== d) return;
+        const a = await MV.M.convertir(crudo, b.se, MV.tgt);
+        await kv.put('pistas', claveMV(i), empacar(a));
+        MV.enDisco.add(i); hechas++; letras += s.t.length;
+        const seg = (performance.now() - t0) / 1000;
+        MV.falta = letras ? seg / letras * (letrasTotal - letras) : null;
+        actualizarMV();
+      }).finally(()=>{ pendientes--; });
+      if(pendientes >= 2) await cola;
+    }
+    await cola;
+  }catch(e){ $('#mvEstado').textContent = e.message || String(e); }
+  finally{
+    if(tok === MV.prepTok){ MV.prep = false; MV.falta = null; }
+    if(!playing) holdScreen(false);
+    actualizarMV();
+  }
+}
+function actualizarMV(){
+  const tiene = !!store.get('vozSE');
+  $('#recEmpty').hidden = tiene; $('#recDone').hidden = !tiene;
+  $('#recBtn').textContent = tiene ? '● Grabar de nuevo' : '● Grabar mi voz';
+  $('#recPlay').hidden = !tiene; $('#mvTest').hidden = !tiene;
+  $('#mvPrepBox').hidden = !tiene || !doc || isAudioDoc();
+  if(!doc || isAudioDoc() || !tiene) return;
+  const conTexto = doc.pages.map((_, p) => p).filter(p => frasesDePagina(p).length);
+  const listas = conTexto.filter(paginaLista).length;
+  $('#mvBar').style.width = Math.round(listas / Math.max(1, conTexto.length) * 100) + '%';
+  let t = `${listas} de ${conTexto.length} páginas listas con tu voz.`;
+  if(MV.prep) t += MV.falta != null ? ` Preparando… faltan ~${fmtTime(MV.falta)}. Deja LectorLibre abierta y el teléfono cargando.` : ' Preparando…';
+  else if(listas < conTexto.length) t += ' Toca «Preparar con mi voz» para seguir.';
+  $('#mvEstado').textContent = t;
+  $('#mvPrep').textContent = MV.prep ? 'Detener' : (listas ? 'Seguir preparando' : 'Preparar con mi voz');
+  $('#mvPrep').hidden = !MV.prep && listas === conTexto.length;
+}
+$('#mvPrep').onclick = prepararMV;
+
+/* ---------- Escuchar lo preparado ---------- */
+// Una página entera como un solo audio, con las pausas de puntuación, y los tiempos de cada frase.
+async function armarPagina(p){
+  const partes = [], tiempos = []; let t = 0;
+  for(const i of frasesDePagina(p)){
+    const a = desempacar(await kv.get('pistas', claveMV(i)));
+    if(!a) return null;
+    tiempos.push({i, s: t}); partes.push(a); t += a.length / SRV;
+    const pz = new Float32Array(Math.round(pausaTras(i) * SRV)); partes.push(pz); t += pz.length / SRV;
+  }
+  if(!partes.length) return null;
+  const n = partes.reduce((x, a) => x + a.length, 0), todo = new Float32Array(n); let k = 0;
+  for(const a of partes){ todo.set(a, k); k += a.length; }
+  return {p, tiempos, url: URL.createObjectURL(wav16(todo))};
+}
+function siguientePagina(p){ for(let q = p + 1; q < doc.pages.length; q++) if(frasesDePagina(q).length) return q; return -1; }
+async function sonarPagina(pg, desde){
+  if(MV.url && MV.url !== pg.url) URL.revokeObjectURL(MV.url);
+  MV.pag = pg; MV.url = pg.url;
+  audioMV.src = pg.url; audioMV.playbackRate = rate; audioMV.preservesPitch = true;
+  const t = (pg.tiempos.find(x => x.i === desde) || pg.tiempos[0]).s;
+  const empezar = () => { try{ audioMV.currentTime = t; }catch(e){} };
+  if(t > 0){ if(audioMV.readyState >= 1) empezar(); else audioMV.addEventListener('loadedmetadata', empezar, {once: true}); }
+  await audioMV.play();
+  // la página siguiente se arma mientras suena esta
+  const q = siguientePagina(pg.p);
+  MV.sig = q >= 0 && paginaLista(q) ? armarPagina(q) : null;
+}
+async function playMV(){
+  await discoMV();
+  const p = flat[idx].p;
+  if(!paginaLista(p)){
+    showStatus('Esta parte todavía no está preparada con tu voz. Abre «Voz» y toca «Preparar con mi voz», o elige la voz del teléfono.');
+    openSheet(); return;
+  }
+  playing = true; setPlayIcon();
+  try{ await sonarPagina(await armarPagina(p), idx); }
+  catch(e){ playing = false; setPlayIcon(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
+}
+audioMV.addEventListener('timeupdate', ()=>{
+  if(!esMiVoz() || !MV.pag) return;
+  const t = audioMV.currentTime; let cur = MV.pag.tiempos[0];
+  for(const x of MV.pag.tiempos){ if(x.s <= t + 0.05) cur = x; else break; }
+  if(cur && cur.i !== idx){ idx = cur.i; showSentence(true); if(Date.now() - MV.guardado > 3000){ MV.guardado = Date.now(); save(); } }
+});
+audioMV.addEventListener('ended', async ()=>{
+  if(!esMiVoz() || !playing || !MV.pag) return;
+  const q = siguientePagina(MV.pag.p);
+  if(q < 0){ finished(); return; }
+  let pg = MV.sig ? await MV.sig : null;
+  if(!pg || pg.p !== q){ await discoMV(); pg = paginaLista(q) ? await armarPagina(q) : null; }
+  if(!pg){ stop(); idx = pageStarts[q]; showSentence(true, true); save(true); showStatus('Hasta aquí llega lo preparado con tu voz. Abre «Voz» y toca «Seguir preparando».'); return; }
+  idx = pg.tiempos[0].i;
+  try{ await sonarPagina(pg, idx); }catch(e){ stop(); }
+});
+audioMV.addEventListener('pause', ()=>{ if(esMiVoz() && playing && !audioMV.ended && audioMV.currentTime > 0.2){ playing = false; setPlayIcon(); save(true); } });
+audioMV.addEventListener('play', ()=>{ if(esMiVoz() && !playing){ playing = true; setPlayIcon(); } });
+async function saltarMV(i){
+  if(!playing){ showSentence(true, true); save(); return; }
+  if(MV.pag && MV.pag.p === flat[i].p){
+    const x = MV.pag.tiempos.find(y => y.i === i); if(x) audioMV.currentTime = x.s; showSentence(true, true); return;
+  }
+  audioMV.pause(); playing = false; await playMV();
+}
+
+/* ---------- Grabar tu voz ---------- */
+let grabando = null;
+$('#recBtn').onclick = async ()=>{
+  if(grabando){ grabando.terminar(); return; }
+  let stream;
+  try{ stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1}}); }
+  catch(e){ showStatus('No pude usar el micrófono. Revisa el permiso en Ajustes › Safari › Micrófono (o en los permisos del navegador).', 'err'); return; }
+  $('#recLive').hidden = false; $('#recEmpty').hidden = false; $('#recDone').hidden = true;
+  const partes = [], rec = new MediaRecorder(stream);
+  rec.ondataavailable = e => { if(e.data.size) partes.push(e.data); };
+  const ctx = new (window.AudioContext || window.webkitAudioContext)(); ctx.resume().catch(()=>{});
+  const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an);
+  const buf = new Uint8Array(an.fftSize), DUR = 25, t0 = Date.now(); let raf;
+  const tic = ()=>{
+    an.getByteTimeDomainData(buf); let pk = 0; for(const v of buf) pk = Math.max(pk, Math.abs(v - 128));
+    $('#recLevel').style.width = Math.min(100, pk / 128 * 140) + '%';
+    const q = Math.max(0, DUR - Math.floor((Date.now() - t0) / 1000));
+    $('#recTime').textContent = `Grabando… ${q} s (toca «Terminar» si ya leíste todo)`;
+    if(q <= 0) terminar(); else raf = requestAnimationFrame(tic);
+  };
+  const terminar = ()=>{ if(rec.state !== 'inactive') rec.stop(); cancelAnimationFrame(raf); };
+  grabando = {terminar};
+  $('#recBtn').textContent = '■ Terminar';
+  rec.onstop = async ()=>{
+    stream.getTracks().forEach(t => t.stop()); grabando = null;
+    $('#recLive').hidden = true; $('#recBtn').textContent = 'Procesando…'; $('#recBtn').disabled = true;
+    try{
+      const blob = new Blob(partes, {type: rec.mimeType || 'audio/mp4'});
+      const pcm = await ctx.decodeAudioData(await blob.arrayBuffer());
+      if(pcm.duration < 8) throw new Error('La grabación quedó muy corta. Lee el texto completo (unos 20 segundos).');
+      showStatus('Analizando tu voz…');
+      if(!MV.M) MV.M = await import('./voz/motor.js');
+      let a = MV.M.recortar(pcm.getChannelData(0));
+      let pico = 0; for(const v of a) pico = Math.max(pico, Math.abs(v));
+      if(pico > 0) a = a.map(v => v * 0.95 / pico);             // nivel parejo, sin importar la distancia al micrófono
+      const se = await MV.M.huellaDe(a, pcm.sampleRate);
+      await kv.put('voz', 'grabacion', blob);
+      store.set('vozSE', Array.from(se)); store.set('vozHash', Date.now().toString(36)); store.del('vozBase');
+      await elegirBase();
+      MV.pref = null; if(doc) await discoMV();
+      hideStatus();
+    }catch(e){ showStatus(e.message || 'No pude procesar la grabación. Intenta otra vez.', 'err'); }
+    finally{ ctx.close(); $('#recBtn').disabled = false; actualizarMV(); }
+  };
+  rec.start(); tic();
+};
+$('#recPlay').onclick = async ()=>{
+  const b = await kv.get('voz', 'grabacion'); if(!b) return;
+  new Audio(URL.createObjectURL(b)).play().catch(()=>{});
+};
+$('#mvTest').onclick = async ()=>{
+  const btn = $('#mvTest'); btn.disabled = true;
+  const prueba = new Audio(); prueba.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; prueba.play().catch(()=>{});
+  try{
+    $('#mvTestNote').textContent = 'Preparando la prueba (la primera vez descarga la voz)…';
+    await motorMV(avanceMV); $('#mvDescarga').textContent = '';
+    const b = MV.base.es;
+    const a = await MV.M.convertir(MV.M.recortar(await MV.M.hablar('Hola. Así suena mi voz leyendo mis libros, con calma y sin apuro.', 'es', b.id, 1)), b.se, MV.tgt);
+    prueba.src = URL.createObjectURL(wav16(a)); prueba.playbackRate = rate; await prueba.play();
+    $('#mvTestNote').textContent = '';
+  }catch(e){ $('#mvTestNote').textContent = e.message || String(e); }
+  finally{ btn.disabled = false; }
+};
+
+/* ---------- Elegir entre la voz del teléfono y la tuya ---------- */
+function setModo(m){
+  if(m !== modo && playing) stop();
+  modo = m; store.set('modo', m);
+  document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.modo === m ? 'true' : 'false'));
+  document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== m);
+  $('#blackBtn').hidden = !doc || isAudioDoc() || m === 'mivoz';
+  updateVoiceBtn();
+  if(m === 'mivoz' && doc && !isAudioDoc()) discoMV().then(actualizarMV); else actualizarMV();
+}
+document.querySelectorAll('.seg button').forEach(b => b.onclick = () => setModo(b.dataset.modo));
+
 /* ================= Reproducir / pausar ================= */
 async function play(){
   if(!flat.length) return;
@@ -597,6 +908,7 @@ async function play(){
     try{ await audioZip.play(); }catch(e){ playing = false; setPlayIcon(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
     return;
   }
+  if(esMiVoz()){ await playMV(); return; }
   if(!synth){ showStatus('Este navegador no puede leer en voz alta. Abre la app en Safari (iPhone) o Chrome (Android).', 'err'); return; }
   primeAudio();
   if(!voices.length || !voiceBy.es){
@@ -612,7 +924,8 @@ function stop(){
   playing = false; token++;
   if(synth) synth.cancel();
   if(!audioZip.paused) audioZip.pause();
-  holdScreen(false);
+  if(!audioMV.paused) audioMV.pause();
+  if(!MV.prep) holdScreen(false);
   if(was) save(true);
   if(doc) setPlayIcon();
 }
@@ -624,6 +937,7 @@ function jump(i){
     if(zipUrl) audioZip.currentTime = flat[idx].s; else store.set('time:'+doc.key, flat[idx].s);
     showSentence(true, true); save(); return;
   }
+  if(esMiVoz()){ saltarMV(idx); return; }
   if(playing){
     if(synth){
       try{ synth.cancel(); }catch(e){}
@@ -647,7 +961,7 @@ if('mediaSession' in navigator){
   h('seekforward', ()=>{ if(isAudioDoc() && zipUrl) audioZip.currentTime = Math.min(audioZip.duration||1e9, audioZip.currentTime+15); else jump(idx+2); });
 }
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'){ if(playing && !isAudioDoc()) holdScreen(true); if(doc && !$('#readView').hidden) showSentence(true); }
+  if(document.visibilityState==='visible'){ if(playing && !isAudioDoc() && !esMiVoz()) holdScreen(true); if(doc && !$('#readView').hidden) showSentence(true); }
 });
 
 /* ---------- Pantalla negra ---------- */
@@ -663,12 +977,14 @@ $('#blackout').addEventListener('click', ()=>{
 function updateVoiceBtn(){
   let t = 'Voz';
   if(doc && isAudioDoc()) t = doc.voice || 'Audio';
+  else if(modo === 'mivoz') t = 'Mi voz';
   else if(voiceBy.es) t = voiceBy.es.name.replace(/\s*\(.*\)\s*/,'');
   $('#voiceBtn').textContent = t;
 }
 function openSheet(){
   const a = isAudioDoc();
   $('#engineBox').hidden = a; $('#audioNote').hidden = !a;
+  setModo(modo);
   $('#scrim').hidden = false; fillVoices();
 }
 function closeSheet(){ $('#scrim').hidden = true; }
@@ -682,11 +998,11 @@ function setRate(r){
   rate = Math.round(r*100)/100; store.set('rate', rate);
   const txt = rate.toFixed(rate*10%1 ? 2 : 1).replace('.',',') + '×';
   $('#rateBtn').textContent = txt; $('#rateVal').textContent = txt; $('#rate').value = rate;
-  audioZip.playbackRate = rate;
+  audioZip.playbackRate = rate; audioMV.playbackRate = rate;
   updateMeta();
 }
 $('#rate').oninput = e=> setRate(+e.target.value);
-$('#rate').onchange = ()=>{ if(playing && !isAudioDoc()) speak(); };
+$('#rate').onchange = ()=>{ if(playing && !isAudioDoc() && !esMiVoz()) speak(); };
 
 // Probar la voz elegida
 $('#test').onclick = ()=>{
@@ -1041,7 +1357,7 @@ showInstall();
 
 /* ---------- Inicio ---------- */
 // La biblioteca antigua (versiones anteriores) guardaba máximo 20 libros sin fecha: se conservan tal cual.
-setRate(rate); limpiarVocesAntiguas();
+setRate(rate);
 (async ()=>{
   const last = store.get('last', null);
   if(store.get('view') === 'read' && last){
@@ -1052,12 +1368,4 @@ setRate(rate); limpiarVocesAntiguas();
 })();
 window.lectora = {estado: () => ({idx, playing})};
 
-// La voz natural y «Mi voz» se quitaron (2026-09-28): se libera lo que habían descargado y generado
-// (unos 400 MB de modelos, las frases ya generadas y la grabación), una sola vez.
-async function limpiarVocesAntiguas(){
-  if(store.get('vocesLimpias', false)) return;
-  try{ await caches.delete('lectora-modelos-v1'); }catch(e){}
-  await Promise.all([tx('pistas','readwrite', s=>s.clear()), tx('voz','readwrite', s=>s.clear())]);
-  for(const k of ['engine','vozSE','vozHash','vozBase','nat:es','nat:en','sinGPU','avisoLento','baseGender']) store.del(k);
-  store.set('vocesLimpias', true);
-}
+

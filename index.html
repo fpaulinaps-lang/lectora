@@ -127,6 +127,14 @@ body.leyendo main{padding-block:14px 190px}
   padding:18px 16px calc(20px + env(safe-area-inset-bottom,0px)); display:flex; flex-direction:column; gap:16px}
 .sheet h2{font-family:var(--read); font-size:1.25rem; margin:0; display:flex; justify-content:space-between; align-items:center}
 .panel{display:flex; flex-direction:column; gap:12px}
+.seg{display:grid; grid-template-columns:repeat(2,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+.seg button{border:0; background:transparent; padding:10px 6px; font-size:.9rem; font-weight:700; color:var(--muted); border-left:1px solid var(--line)}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
+.script{font-family:var(--read); font-size:1.05rem; line-height:1.6; background:var(--bg); border-radius:10px; padding:12px 14px; margin:0}
+.meter{height:10px; border-radius:5px; background:var(--line); overflow:hidden}
+.meter i{display:block; height:100%; width:0; background:var(--accent); transition:width .08s}
+.btn.rec{background:var(--accent); color:var(--accent-ink)}
 .field{display:flex; flex-direction:column; gap:6px}
 .field label,.lbl{font-size:.75rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:700}
 .field select{padding:11px 10px; border-radius:10px; border:1px solid var(--line); background:var(--bg); width:100%}
@@ -197,15 +205,45 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
     <p class="note" id="audioNote" hidden></p>
 
     <div id="engineBox" class="panel">
-      <div class="panel">
+      <div class="seg" role="group" aria-label="Tipo de voz">
+        <button data-modo="telefono" aria-pressed="true">Voz del teléfono</button>
+        <button data-modo="mivoz" aria-pressed="false">Mi voz</button>
+      </div>
+
+      <div class="panel" data-panel="telefono">
         <p class="hint">LectorLibre usa las voces que trae tu teléfono: sin internet y sin límites.</p>
         <div class="field"><label for="voiceEs">Voz en español</label><select id="voiceEs"></select></div>
         <div class="field"><label for="voiceEn">Voz en inglés</label><select id="voiceEn"></select></div>
         <label class="check"><input type="checkbox" id="allLangs"> Mostrar voces de todos los idiomas</label>
         <p class="hint" id="voiceNote"></p>
+        <div class="row"><button class="btn ghost" id="test">Probar las voces</button><span class="hint" id="testNote"></span></div>
       </div>
 
-      <div class="row"><button class="btn ghost" id="test">Probar las voces</button><span class="hint" id="testNote"></span></div>
+      <div class="panel" data-panel="mivoz" hidden>
+        <p class="hint">Tu teléfono prepara el libro con tu voz <b>de antemano</b>, y después lo lee de corrido, sin pausas, aunque bloquees la pantalla. Prepararlo tarda: una hora de lectura puede necesitar entre 2 y 6 horas, según el teléfono. Lo mejor es hacerlo de noche, con el teléfono cargando y LectorLibre abierta. La primera vez descarga unos 180 MB (usa Wi-Fi).</p>
+        <div id="recEmpty" class="panel">
+          <p class="hint">Primero graba 25 segundos leyendo este texto en voz alta, con tu tono normal y en un lugar sin ruido:</p>
+          <p class="script">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención. Por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden. Hoy voy a leer algunos documentos importantes, página por página, hasta terminarlos.</p>
+        </div>
+        <p class="note" id="recDone" hidden>Tu voz está grabada. La lectura se parece a ti en el tono; no copia exactamente tu acento ni tu manera de hablar.</p>
+        <div id="recLive" class="panel" hidden>
+          <div class="meter"><i id="recLevel"></i></div>
+          <p class="hint" id="recTime"></p>
+        </div>
+        <div class="row">
+          <button class="btn rec" id="recBtn">● Grabar mi voz</button>
+          <button class="btn ghost" id="recPlay" hidden>Escuchar grabación</button>
+          <button class="btn ghost" id="mvTest" hidden>Probar mi voz</button>
+        </div>
+        <p class="hint" id="mvTestNote"></p>
+        <div class="panel" id="mvPrepBox" hidden>
+          <span class="lbl">Este libro</span>
+          <div class="prog"><i id="mvBar"></i></div>
+          <p class="hint" id="mvEstado"></p>
+          <div class="row"><button class="btn" id="mvPrep">Preparar con mi voz</button></div>
+          <p class="hint" id="mvDescarga"></p>
+        </div>
+      </div>
     </div>
 
     <div class="field">
@@ -218,8 +256,8 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       <p><b>iPhone:</b> en <b>Ajustes › Accesibilidad › Contenido leído › Voces</b>, entra a Español (y a Inglés si lees en inglés) y descarga una voz que diga <b>Premium</b> o <b>Mejorada</b>. LectorLibre la elige sola.</p>
       <p><b>Android:</b> en <b>Ajustes › Sistema › Idiomas › Salida de texto a voz</b>, elige Google e instala el español.</p>
       <span class="lbl">Batería</span>
-      <p>Con la pantalla encendida gasta más: usa <b>Pantalla negra</b> mientras escuchas.</p>
-    </div>
+      <p><b>Voz del teléfono:</b> la pantalla tiene que quedar encendida; usa <b>Pantalla negra</b> mientras escuchas.</p>
+      <p><b>Mi voz:</b> ya preparada, escucharla gasta muy poco y puedes bloquear la pantalla. Prepararla sí gasta: hazlo cargando.</p>
     </div>
   </div>
 </div>

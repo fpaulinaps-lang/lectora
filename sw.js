@@ -1,5 +1,5 @@
 // Guarda la app en el teléfono para que abra sin internet.
-const CACHE = 'lectora-v21';                // la app: se renueva con cada versión
+const CACHE = 'lectora-v22';                // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo: sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
@@ -21,15 +21,10 @@ self.addEventListener('install', e => {
   }))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  // Se borran las versiones viejas de la app y los archivos de las voces que se quitaron
-  // (motor de voz natural y «Mi voz»: unos 35 MB guardados al usarlas).
+  // Se borran las versiones viejas de la app; lo guardado al usarlo (motor de «Mi voz», OCR) se conserva.
   e.waitUntil((async () => {
     for (const k of await caches.keys()) {
       if (/^lectora-v\d+$/.test(k) && k !== CACHE) await caches.delete(k);
-    }
-    const extra = await caches.open(EXTRA);
-    for (const req of await extra.keys()) {
-      if (/\/(voz|vendor\/ort)\/|phonemizer/.test(req.url)) await extra.delete(req);
     }
     await self.clients.claim();
   })());
