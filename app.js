@@ -232,8 +232,10 @@ function renderLibrary(){
     const t = document.createElement('span'); t.className = 'book-title'; t.textContent = it.name;
     const m = document.createElement('span'); m.className = 'book-meta';
     const pct = it.pct || 0;
-    m.textContent = it.sample ? 'Ejemplo · 3 páginas'
-      : `${it.pages} ${it.pages===1?'página':'páginas'}` + (pct ? ` · ${pct}% leído` : ' · sin empezar') + (it.opened ? ` · ${fmtFecha(it.opened)}` : '');
+    const dur = it.sample ? duracionDe(SAMPLE) : duracionLib(it);
+    m.textContent = (it.sample ? 'Ejemplo · 3 páginas' : `${it.pages} ${it.pages===1?'página':'páginas'}`)
+      + (dur != null ? ` · ${fmtTime(dur)} de lectura` : '')
+      + (it.sample ? '' : (pct ? ` · ${pct}% leído` : ' · sin empezar') + (it.opened ? ` · ${fmtFecha(it.opened)}` : ''));
     if(it.audio || it.epub || it.ocr){ const g = document.createElement('span'); g.className = 'tag'; g.textContent = it.epub ? 'EPUB' : it.ocr ? 'OCR' : (it.voice || 'audio'); m.appendChild(g); }
     b.append(t, m);
     if(!it.sample){ const p = document.createElement('div'); p.className = 'prog'; p.innerHTML = '<i></i>'; p.firstChild.style.width = pct + '%'; b.appendChild(p); }
@@ -249,6 +251,7 @@ function renderLibrary(){
     } else li.appendChild(document.createElement('span'));
     shelf.appendChild(li);
   });
+  completarDuraciones();
 }
 async function removeBook(key){
   if(doc && doc.key === key){ stop(); doc = null; }
@@ -257,9 +260,31 @@ async function removeBook(key){
   await Promise.all([tx('docs','readwrite', s=>s.delete(key)), kv.del('audio', key), kv.del('portadas', key), kv.delPrefix('pistas', key + '|')]);
   const u = urlsPortada.get(key); if(u) URL.revokeObjectURL(u); urlsPortada.delete(key);
 }
+// Duración de la lectura en voz alta a velocidad normal (1×). Medido con la voz Paulina de Apple:
+// 13,2 letras por segundo contando las pausas. Para los audios del Mac se usa la duración real.
+const LETRAS_POR_SEG = 13.2;
+function letrasDe(d){
+  let n = 0;
+  for(const pg of d.pages) for(const x of pg) n += (typeof x === 'string' ? x : x.t).length + 1;
+  return n;
+}
+const duracionDe = d => d.kind === 'audio' && d.duration ? d.duration : letrasDe(d) / LETRAS_POR_SEG;
+const duracionLib = it => it.audio && it.dur != null ? it.dur : it.letras != null ? it.letras / LETRAS_POR_SEG : null;
+// Los libros agregados antes no tenían la duración guardada: se calcula una vez, al mostrar la biblioteca.
+let calculandoDuraciones = false;
+async function completarDuraciones(){
+  if(calculandoDuraciones) return;
+  const faltan = lib().filter(it => it.letras == null && !(it.audio && it.dur != null));
+  if(!faltan.length) return;
+  calculandoDuraciones = true;
+  try{
+    for(const it of faltan){ const d = await dbGet(it.key); if(d) libUpdate(it.key, d.kind === 'audio' ? {dur: Math.round(duracionDe(d))} : {letras: letrasDe(d)}); }
+  }finally{ calculandoDuraciones = false; }
+  if(!$('#libView').hidden) renderLibrary();
+}
 function addToLibrary(d){
   const l = lib().filter(x=>x.key!==d.key);
-  l.push({key:d.key, name:d.name, pages:d.pages.length, page:1, pct:0, audio:d.kind==='audio', epub:d.kind==='epub', ocr:!!d.ocr, voice:d.voice, added:Date.now()});
+  l.push({key:d.key, name:d.name, pages:d.pages.length, page:1, pct:0, audio:d.kind==='audio', epub:d.kind==='epub', ocr:!!d.ocr, voice:d.voice, added:Date.now(), ...(d.kind === 'audio' ? {dur: Math.round(duracionDe(d))} : {letras: letrasDe(d)})});
   setLib(l);
 }
 
@@ -374,7 +399,7 @@ function updateMeta(){
   } else {
     pct = total ? Math.round(idx/Math.max(1,total-1)*100) : 0;
     let chars = 0; for(let i=idx;i<total;i++) chars += flat[i].t.length;
-    left = chars/(15*rate);
+    left = chars/(LETRAS_POR_SEG*rate);
   }
   $('#where').textContent = `Página ${p+1} de ${doc.pages.length} · ${pct}%`;
   $('#left').textContent = total ? 'quedan ~' + fmtTime(left) : '';
