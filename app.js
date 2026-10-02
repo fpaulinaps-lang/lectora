@@ -377,7 +377,8 @@ function mark(scroll){
   }
 }
 function showSentence(scroll, force){
-  if(!force && document.visibilityState !== 'visible') return;
+  // en segundo plano o con la pantalla negra no se redibuja (gasta batería y nadie lo ve)
+  if(!force && (document.visibilityState !== 'visible' || !$('#blackout').hidden)) return;
   const s = flat[idx]; if(!s) return;
   if(s.p !== shownPage) renderPage(s.p);
   mark(scroll); updateMeta();
@@ -883,15 +884,27 @@ async function playMV(){
   try{ await sonarPagina(await armarBloque(p), idx); }
   catch(e){ playing = false; setPlayIcon(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
 }
-audioMV.addEventListener('timeupdate', ()=>{
-  if(!esMiVoz() || !MV.pag) return;
+// Frase que está sonando, según el tiempo del audio.
+function sincronizarMV(){
+  if(!esMiVoz() || !MV.pag) return false;
   const t = audioMV.currentTime; let cur = MV.pag.tiempos[0];
   for(const x of MV.pag.tiempos){ if(x.s <= t + 0.05) cur = x; else break; }
-  if(cur && cur.i !== idx){
-    idx = cur.i; showSentence(true);
-    const cada = document.visibilityState === 'visible' ? 3000 : 20000;   // en segundo plano, casi sin despertar
-    if(Date.now() - MV.guardado > cada){ MV.guardado = Date.now(); save(); }
+  if(cur && cur.i !== idx){ idx = cur.i; return true; }
+  return false;
+}
+// Mientras la app no está en pantalla (otra app, teléfono bloqueado) no se hace nada en cada instante:
+// la posición se calcula al volver, al pausar, al terminar cada bloque y al salir de la app.
+audioMV.addEventListener('timeupdate', ()=>{
+  if(document.visibilityState !== 'visible' || !$('#blackout').hidden) return;
+  if(sincronizarMV()){
+    showSentence(true);
+    if(Date.now() - MV.guardado > 3000){ MV.guardado = Date.now(); save(); }
   }
+});
+document.addEventListener('visibilitychange', ()=>{
+  if(!esMiVoz() || !MV.pag) return;
+  sincronizarMV();
+  if(document.visibilityState === 'visible') showSentence(true); else save(true);
 });
 audioMV.addEventListener('ended', async ()=>{
   if(!esMiVoz() || !playing || !MV.pag) return;
@@ -903,7 +916,7 @@ audioMV.addEventListener('ended', async ()=>{
   idx = pg.tiempos[0].i;
   try{ await sonarPagina(pg, idx); }catch(e){ stop(); }
 });
-audioMV.addEventListener('pause', ()=>{ if(esMiVoz() && playing && !audioMV.ended && audioMV.currentTime > 0.2){ playing = false; setPlayIcon(); save(true); } });
+audioMV.addEventListener('pause', ()=>{ sincronizarMV(); if(esMiVoz() && playing && !audioMV.ended && audioMV.currentTime > 0.2){ playing = false; setPlayIcon(); save(true); } });
 audioMV.addEventListener('play', ()=>{ if(esMiVoz() && !playing){ playing = true; setPlayIcon(); } });
 async function saltarMV(i){
   if(!playing){ showSentence(true, true); save(); return; }
@@ -1007,12 +1020,12 @@ async function play(){
     voiceBy.es = pickVoice('es'); voiceBy.en = pickVoice('en');
   }
   if(synth.paused){ try{ synth.resume(); }catch(e){} }
-  playing = true; setPlayIcon(); holdScreen(true); vigilar(true);
+  playing = true; setPlayIcon(); holdScreen(true); vigilar(true); programarNegro();
   speak();
 }
 function stop(){
   const was = playing;
-  playing = false; token++; vigilar(false);
+  playing = false; token++; vigilar(false); clearTimeout(negroTimer);
   if(synth) synth.cancel();
   if(!audioZip.paused) audioZip.pause();
   if(!audioMV.paused) audioMV.pause();
@@ -1047,7 +1060,7 @@ function mediaMeta(){
 if('mediaSession' in navigator){
   const h = (a,f)=>{ try{ navigator.mediaSession.setActionHandler(a,f); }catch(e){} };
   h('play', ()=>play()); h('pause', ()=>stop());
-  h('previoustrack', ()=>jump(idx-1)); h('nexttrack', ()=>jump(idx+1));
+  h('previoustrack', ()=>{ sincronizarMV(); jump(idx-1); }); h('nexttrack', ()=>{ sincronizarMV(); jump(idx+1); });
   h('seekbackward', ()=>{ if(isAudioDoc() && zipUrl) audioZip.currentTime = Math.max(0, audioZip.currentTime-15); else jump(idx-2); });
   h('seekforward', ()=>{ if(isAudioDoc() && zipUrl) audioZip.currentTime = Math.min(audioZip.duration||1e9, audioZip.currentTime+15); else jump(idx+2); });
 }
@@ -1071,6 +1084,20 @@ document.addEventListener('visibilitychange',()=>{
 /* ---------- Pantalla negra ---------- */
 let lastTap = 0;
 $('#blackBtn').onclick = ()=>{ $('#blackout').hidden = false; updateMeta(); };
+// Con la voz del teléfono la pantalla tiene que quedar encendida: si no la tocas por un rato, se pone negra
+// sola (en pantallas OLED el negro apaga los píxeles). Se desactiva en Voz › «Apagar la pantalla sola».
+const NEGRO_SEG = 20;
+let negroTimer = null;
+function programarNegro(){
+  clearTimeout(negroTimer);
+  if(!store.get('autoNegro', true)) return;
+  negroTimer = setTimeout(()=>{
+    if(playing && doc && !isAudioDoc() && !esMiVoz() && document.visibilityState === 'visible' && $('#scrim').hidden){
+      $('#blackout').hidden = false; updateMeta();
+    }
+  }, NEGRO_SEG * 1000);
+}
+['touchstart', 'mousedown', 'keydown', 'scroll'].forEach(ev => document.addEventListener(ev, ()=>{ if(playing) programarNegro(); }, {passive: true}));
 $('#blackout').addEventListener('click', ()=>{
   const now = Date.now();
   if(now - lastTap < 400){ $('#blackout').hidden = true; showSentence(true); }
@@ -1097,6 +1124,8 @@ $('#rateBtn').onclick = openSheet;
 $('#closeSheet').onclick = closeSheet;
 $('#scrim').addEventListener('click', e=>{ if(e.target.id==='scrim') closeSheet(); });
 $('#allLangs').onchange = fillVoices;
+$('#autoNegro').checked = store.get('autoNegro', true);
+$('#autoNegro').onchange = e => { store.set('autoNegro', e.target.checked); if(playing) programarNegro(); };
 
 function setRate(r){
   rate = Math.round(r*100)/100; store.set('rate', rate);

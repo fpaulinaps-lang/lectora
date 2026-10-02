@@ -215,6 +215,7 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
         <div class="field"><label for="voiceEs">Voz en español</label><select id="voiceEs"></select></div>
         <div class="field"><label for="voiceEn">Voz en inglés</label><select id="voiceEn"></select></div>
         <label class="check"><input type="checkbox" id="allLangs"> Mostrar voces de todos los idiomas</label>
+        <label class="check"><input type="checkbox" id="autoNegro" checked> Apagar la pantalla sola mientras lee (pantalla negra a los 20 s sin tocarla; ahorra batería)</label>
         <p class="hint" id="voiceNote"></p>
         <div class="row"><button class="btn ghost" id="test">Probar las voces</button><span class="hint" id="testNote"></span></div>
       </div>
@@ -258,7 +259,7 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       <p><b>Android:</b> en <b>Ajustes › Sistema › Idiomas › Salida de texto a voz</b>, elige Google e instala el español.</p>
       <span class="lbl">Batería</span>
       <p><b>Mi voz ya preparada:</b> sigue sonando mientras usas otras apps y con el teléfono bloqueado, como un podcast. Es lo que menos batería gasta. Prepararla sí gasta: hazlo cargando.</p>
-      <p><b>Voz del teléfono:</b> el iPhone la pausa si sales de LectorLibre o bloqueas la pantalla (sigue sola al volver). Mientras escuchas, usa <b>Pantalla negra</b> para gastar menos.</p>
+      <p><b>Voz del teléfono:</b> el iPhone la pausa si sales de LectorLibre o bloqueas la pantalla (sigue sola al volver). Mientras escuchas, la pantalla se pone negra sola a los 20 segundos sin tocarla (toca dos veces para volver); baja también el brillo.</p>
     </div>
   </div>
 </div>
