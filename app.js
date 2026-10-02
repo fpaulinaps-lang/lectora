@@ -510,8 +510,14 @@ function speak(continuando = false){
 }
 
 // Watchdog no intrusivo: solo rescata la reproducción si se congela de verdad por varios segundos
-setInterval(()=>{
-  if(!playing || isAudioDoc() || !synth) return;
+// Solo corre mientras se escucha con la voz del teléfono (un temporizador siempre activo gasta batería).
+let vigilancia = null;
+function vigilar(on){
+  if(on && !vigilancia) vigilancia = setInterval(revisarVoz, 1000);
+  if(!on && vigilancia){ clearInterval(vigilancia); vigilancia = null; }
+}
+function revisarVoz(){
+  if(!playing || isAudioDoc() || !synth || esMiVoz()){ vigilar(false); return; }
   if(synth.paused){ try{ synth.resume(); }catch(e){} }
   if(synth.speaking || synth.pending){ stalledSince = 0; return; }
   if(Date.now() - lastStart < 4000) return;
@@ -521,7 +527,7 @@ setInterval(()=>{
     try{ synth.cancel(); }catch(e){}
     setTimeout(()=>{ if(playing) speak(); }, 50);
   }
-}, 1000);
+}
 
 // Voces del sistema: fuera las voces "de broma" de Apple (cantan o suenan a efectos) y las Eloquence, muy robóticas.
 const NOVEDAD = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Jester|Organ|Pipe Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Kathy|Ralph|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley)\b/i;
@@ -832,18 +838,26 @@ $('#mvPrep').onclick = prepararMV;
 
 /* ---------- Escuchar lo preparado ---------- */
 // Una página entera como un solo audio, con las pausas de puntuación, y los tiempos de cada frase.
-async function armarPagina(p){
-  const partes = [], tiempos = []; let t = 0;
-  for(const i of frasesDePagina(p)){
-    const a = desempacar(await kv.get('pistas', claveMV(i)));
-    if(!a) return null;
-    tiempos.push({i, s: t}); partes.push(a); t += a.length / SRV;
-    const pz = new Float32Array(Math.round(pausaTras(i) * SRV)); partes.push(pz); t += pz.length / SRV;
+// Varias páginas seguidas en un solo audio de hasta ~10 minutos, con las pausas de puntuación y el tiempo
+// de cada frase. Mientras más largo el bloque, menos veces tiene que despertarse la app con el teléfono
+// bloqueado o en otra app (gasta menos batería y hay menos riesgo de corte al cambiar de audio).
+const BLOQUE_SEG = 600;
+async function armarBloque(p){
+  const partes = [], tiempos = []; let t = 0, ult = p;
+  for(let q = p; q >= 0 && q < doc.pages.length; q = siguientePagina(q)){
+    if(q !== p && (t >= BLOQUE_SEG || !paginaLista(q))) break;
+    for(const i of frasesDePagina(q)){
+      const a = desempacar(await kv.get('pistas', claveMV(i)));
+      if(!a) return null;
+      tiempos.push({i, s: t}); partes.push(a); t += a.length / SRV;
+      const pz = new Float32Array(Math.round(pausaTras(i) * SRV)); partes.push(pz); t += pz.length / SRV;
+    }
+    ult = q;
   }
   if(!partes.length) return null;
   const n = partes.reduce((x, a) => x + a.length, 0), todo = new Float32Array(n); let k = 0;
   for(const a of partes){ todo.set(a, k); k += a.length; }
-  return {p, tiempos, url: URL.createObjectURL(wav16(todo))};
+  return {p, ult, tiempos, url: URL.createObjectURL(wav16(todo))};
 }
 function siguientePagina(p){ for(let q = p + 1; q < doc.pages.length; q++) if(frasesDePagina(q).length) return q; return -1; }
 async function sonarPagina(pg, desde){
@@ -854,9 +868,9 @@ async function sonarPagina(pg, desde){
   const empezar = () => { try{ audioMV.currentTime = t; }catch(e){} };
   if(t > 0){ if(audioMV.readyState >= 1) empezar(); else audioMV.addEventListener('loadedmetadata', empezar, {once: true}); }
   await audioMV.play();
-  // la página siguiente se arma mientras suena esta
-  const q = siguientePagina(pg.p);
-  MV.sig = q >= 0 && paginaLista(q) ? armarPagina(q) : null;
+  // el bloque siguiente se arma mientras suena este
+  const q = siguientePagina(pg.ult);
+  MV.sig = q >= 0 && paginaLista(q) ? armarBloque(q) : null;
 }
 async function playMV(){
   await discoMV();
@@ -866,21 +880,25 @@ async function playMV(){
     openSheet(); return;
   }
   playing = true; setPlayIcon();
-  try{ await sonarPagina(await armarPagina(p), idx); }
+  try{ await sonarPagina(await armarBloque(p), idx); }
   catch(e){ playing = false; setPlayIcon(); showStatus('El teléfono no dejó reproducir. Toca el botón otra vez.'); }
 }
 audioMV.addEventListener('timeupdate', ()=>{
   if(!esMiVoz() || !MV.pag) return;
   const t = audioMV.currentTime; let cur = MV.pag.tiempos[0];
   for(const x of MV.pag.tiempos){ if(x.s <= t + 0.05) cur = x; else break; }
-  if(cur && cur.i !== idx){ idx = cur.i; showSentence(true); if(Date.now() - MV.guardado > 3000){ MV.guardado = Date.now(); save(); } }
+  if(cur && cur.i !== idx){
+    idx = cur.i; showSentence(true);
+    const cada = document.visibilityState === 'visible' ? 3000 : 20000;   // en segundo plano, casi sin despertar
+    if(Date.now() - MV.guardado > cada){ MV.guardado = Date.now(); save(); }
+  }
 });
 audioMV.addEventListener('ended', async ()=>{
   if(!esMiVoz() || !playing || !MV.pag) return;
-  const q = siguientePagina(MV.pag.p);
+  const q = siguientePagina(MV.pag.ult);
   if(q < 0){ finished(); return; }
   let pg = MV.sig ? await MV.sig : null;
-  if(!pg || pg.p !== q){ await discoMV(); pg = paginaLista(q) ? await armarPagina(q) : null; }
+  if(!pg || pg.p !== q){ await discoMV(); pg = paginaLista(q) ? await armarBloque(q) : null; }
   if(!pg){ stop(); idx = pageStarts[q]; showSentence(true, true); save(true); showStatus('Hasta aquí llega lo preparado con tu voz. Abre «Voz» y toca «Seguir preparando».'); return; }
   idx = pg.tiempos[0].i;
   try{ await sonarPagina(pg, idx); }catch(e){ stop(); }
@@ -889,7 +907,7 @@ audioMV.addEventListener('pause', ()=>{ if(esMiVoz() && playing && !audioMV.ende
 audioMV.addEventListener('play', ()=>{ if(esMiVoz() && !playing){ playing = true; setPlayIcon(); } });
 async function saltarMV(i){
   if(!playing){ showSentence(true, true); save(); return; }
-  if(MV.pag && MV.pag.p === flat[i].p){
+  if(MV.pag && flat[i].p >= MV.pag.p && flat[i].p <= MV.pag.ult && MV.pag.tiempos.some(y => y.i === i)){
     const x = MV.pag.tiempos.find(y => y.i === i); if(x) audioMV.currentTime = x.s; showSentence(true, true); return;
   }
   audioMV.pause(); playing = false; await playMV();
@@ -989,12 +1007,12 @@ async function play(){
     voiceBy.es = pickVoice('es'); voiceBy.en = pickVoice('en');
   }
   if(synth.paused){ try{ synth.resume(); }catch(e){} }
-  playing = true; setPlayIcon(); holdScreen(true);
+  playing = true; setPlayIcon(); holdScreen(true); vigilar(true);
   speak();
 }
 function stop(){
   const was = playing;
-  playing = false; token++;
+  playing = false; token++; vigilar(false);
   if(synth) synth.cancel();
   if(!audioZip.paused) audioZip.pause();
   if(!audioMV.paused) audioMV.pause();
@@ -1033,6 +1051,19 @@ if('mediaSession' in navigator){
   h('seekbackward', ()=>{ if(isAudioDoc() && zipUrl) audioZip.currentTime = Math.max(0, audioZip.currentTime-15); else jump(idx-2); });
   h('seekforward', ()=>{ if(isAudioDoc() && zipUrl) audioZip.currentTime = Math.min(audioZip.duration||1e9, audioZip.currentTime+15); else jump(idx+2); });
 }
+// iPhone detiene la voz del teléfono cuando se sale de la app: al volver, la vigilancia la retoma.
+// La primera vez se explica que para escuchar en otras apps hay que usar «Mi voz» preparada.
+document.addEventListener('visibilitychange', ()=>{
+  if(!playing || !doc || isAudioDoc() || esMiVoz()) return;
+  if(document.visibilityState === 'hidden') MV.fondoTel = true;
+  else if(MV.fondoTel){
+    MV.fondoTel = false;
+    if(!store.get('avisoFondo')){
+      store.set('avisoFondo', true);
+      showStatus('Con la voz del teléfono, iPhone pausa la lectura cuando sales de LectorLibre (sigue sola al volver). Para escuchar mientras usas otras apps o con el teléfono bloqueado, usa «Mi voz» ya preparada.');
+    }
+  }
+});
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'){ if(playing && !isAudioDoc() && !esMiVoz()) holdScreen(true); if(doc && !$('#readView').hidden) showSentence(true); }
 });
