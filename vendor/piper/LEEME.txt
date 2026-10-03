@@ -1,0 +1,9 @@
+Pronunciación para la voz natural (Piper) de LectorLibre.
+
+piper_phonemize.js / .wasm / .data vienen del paquete npm @diffusionstudio/piper-wasm 1.0.0
+(https://github.com/diffusion-studio/piper-wasm), sin cambios. Contienen:
+- piper-phonemize (licencia MIT): https://github.com/rhasspy/piper-phonemize
+- espeak-ng y sus datos de idiomas (licencia GPL-3.0): https://github.com/espeak-ng/espeak-ng
+
+Las voces (modelos .onnx) no están en este repositorio: la app las baja de
+https://huggingface.co/rhasspy/piper-voices la primera vez que se usan.

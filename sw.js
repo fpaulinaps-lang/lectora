@@ -1,5 +1,5 @@
 // Guarda la app en el teléfono para que abra sin internet.
-const CACHE = 'lectora-v26';                // la app: se renueva con cada versión
+const CACHE = 'lectora-v27';                // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo: sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
@@ -72,6 +72,10 @@ self.addEventListener('fetch', e => {
   }
   if (e.request.mode === 'navigate') {
     e.respondWith(redPrimero(e.request, new URL('index.html', self.registration.scope).href, CACHE));
+    return;
+  }
+  if (/\/vendor\//.test(url.pathname)) {             // librerías (no cambian nunca): primero la copia guardada
+    e.respondWith(caches.match(e.request.url).then(c => c ? aislar(c) : redPrimero(e.request, e.request.url, EXTRA)));
     return;
   }
   e.respondWith(redPrimero(e.request, e.request.url, EXTRA));

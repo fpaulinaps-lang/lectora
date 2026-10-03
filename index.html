@@ -127,7 +127,7 @@ body.leyendo main{padding-block:14px 190px}
   padding:18px 16px calc(20px + env(safe-area-inset-bottom,0px)); display:flex; flex-direction:column; gap:16px}
 .sheet h2{font-family:var(--read); font-size:1.25rem; margin:0; display:flex; justify-content:space-between; align-items:center}
 .panel{display:flex; flex-direction:column; gap:12px}
-.seg{display:grid; grid-template-columns:repeat(2,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+.seg{display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden}
 .seg button{border:0; background:transparent; padding:10px 6px; font-size:.9rem; font-weight:700; color:var(--muted); border-left:1px solid var(--line)}
 .seg button:first-child{border-left:0}
 .seg button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
@@ -206,11 +206,19 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
 
     <div id="engineBox" class="panel">
       <div class="seg" role="group" aria-label="Tipo de voz">
-        <button data-modo="telefono" aria-pressed="true">Voz del teléfono</button>
+        <button data-modo="natural" aria-pressed="true">Natural</button>
+        <button data-modo="telefono" aria-pressed="false">Teléfono</button>
         <button data-modo="mivoz" aria-pressed="false">Mi voz</button>
       </div>
 
-      <div class="panel" data-panel="telefono">
+      <div class="panel" data-panel="natural">
+        <p class="hint">Voces de narrador libres y gratuitas (<a href="https://github.com/rhasspy/piper" target="_blank" rel="noopener">Piper</a>): leen como un audiolibro, con pausas entre frases, párrafos y capítulos. Se generan en tu teléfono mientras escuchas, sin internet y sin límites, y siguen sonando en otras apps y con la pantalla bloqueada. La primera vez baja la voz elegida (usa Wi-Fi); el inglés se baja solo si un libro lo necesita.</p>
+        <div class="field"><label for="naEs">Voz en español</label><select id="naEs"></select></div>
+        <div class="field"><label for="naEn">Voz en inglés</label><select id="naEn"></select></div>
+        <div class="row"><button class="btn ghost" id="naTest">Probar la voz</button><span class="hint" id="naNote"></span></div>
+      </div>
+
+      <div class="panel" data-panel="telefono" hidden>
         <p class="hint">LectorLibre usa las voces que trae tu teléfono: sin internet y sin límites.</p>
         <div class="field"><label for="voiceEs">Voz en español</label><select id="voiceEs"></select></div>
         <div class="field"><label for="voiceEn">Voz en inglés</label><select id="voiceEn"></select></div>
@@ -254,10 +262,11 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
     </div>
 
     <div class="tips">
-      <span class="lbl">Para que suene natural</span>
+      <span class="lbl">Si usas la voz del teléfono</span>
       <p><b>iPhone:</b> en <b>Ajustes › Accesibilidad › Contenido leído › Voces</b>, entra a Español (y a Inglés si lees en inglés) y descarga una voz que diga <b>Premium</b> o <b>Mejorada</b>. LectorLibre la elige sola.</p>
       <p><b>Android:</b> en <b>Ajustes › Sistema › Idiomas › Salida de texto a voz</b>, elige Google e instala el español.</p>
       <span class="lbl">Batería</span>
+      <p><b>Voz natural:</b> también sigue sonando en otras apps y con el teléfono bloqueado. Genera la voz por tandas, unos minutos por adelantado, y entre tandas el procesador descansa.</p>
       <p><b>Mi voz ya preparada:</b> sigue sonando mientras usas otras apps y con el teléfono bloqueado, como un podcast. Es lo que menos batería gasta. Prepararla sí gasta: hazlo cargando.</p>
       <p><b>Voz del teléfono:</b> el iPhone la pausa si sales de LectorLibre o bloqueas la pantalla (sigue sola al volver). Mientras escuchas, la pantalla se pone negra sola a los 20 segundos sin tocarla (toca dos veces para volver); baja también el brillo.</p>
     </div>
