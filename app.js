@@ -1334,6 +1334,7 @@ async function relevar(){
     stop(); showStatus('El teléfono detuvo la lectura. Toca reproducir para seguir.'); return;
   }
   viejo.pause(); soltarBloque(bViejo, viejo);
+  MV.ultimoRelevo = Date.now();
   if(document.visibilityState === 'hidden') diag(`siguiente bloque: ${Math.round(L.b.fin)} s`);
   seguirGenerando();
   prepararSiguiente();
@@ -1433,6 +1434,7 @@ for(const el of reproductores){
     if(el.src === SILENCIO) return;
     sincronizarAU();
     if(!playing || el.ended || el.currentTime <= 0.2) return;
+    diag('el audio se pausó solo · sesión de audio: ' + estadoSesion());
     // Si no fuiste tú (tus pausas pasan por stop()), fue el sistema: una notificación, una llamada, Siri.
     // Mientras dure, se espera; al terminar, sigue sola. Si no es una interrupción (por ejemplo, sacaste
     // los audífonos), queda en pausa.
@@ -1447,6 +1449,7 @@ for(const el of reproductores){
   }));
   el.addEventListener('play', actual(()=>{ if(!playing && el.src !== SILENCIO){ playing = true; setPlayIcon(); } }));
 }
+const estadoSesion = () => { try{ return navigator.audioSession ? navigator.audioSession.state + '/' + navigator.audioSession.type : 'sin datos'; }catch(e){ return '?'; } };
 const sesionInterrumpida = () => { try{ return navigator.audioSession && navigator.audioSession.state === 'interrupted'; }catch(e){ return false; } };
 // Retoma después de una interrupción: apenas el sistema devuelve el audio (o al volver a la app). Se rinde a
 // los 10 minutos (si era una llamada larga, no conviene que siga sola mucho después).
@@ -1460,6 +1463,7 @@ function reintentar(){
   MV.reintento = setTimeout(reintentar, sesionInterrumpida() ? 3000 : 1500);
 }
 try{ navigator.audioSession && navigator.audioSession.addEventListener('statechange', ()=>{
+  if(playing || MV.interrumpido) diag('sesión de audio del iPhone: ' + estadoSesion());
   if(sesionInterrumpida()) MV.ultimaInterrupcion = Date.now();
   else if(MV.interrumpido) reintentar();
 }); }catch(e){}
@@ -1643,7 +1647,15 @@ function mediaMeta(){
 }
 if('mediaSession' in navigator){
   const h = (a,f)=>{ try{ navigator.mediaSession.setActionHandler(a,f); }catch(e){} };
-  h('play', ()=>play()); h('pause', ()=>stop());
+  h('play', ()=>{ diag('▶ desde la pantalla bloqueada o el centro de control'); play(); });
+  // El iPhone también manda «pausa» cuando otra app toma el audio (un video con sonido, una llamada).
+  // Si coincide con una interrupción, se espera y sigue sola; si no, es una pausa tuya.
+  h('pause', ()=>{
+    const interrupcion = sesionInterrumpida() || Date.now() - (MV.ultimaInterrupcion || 0) < 3000;
+    diag(`pausa pedida por el iPhone · sesión de audio: ${estadoSesion()}` + (MV.ultimoRelevo ? ` · ${Math.round((Date.now() - MV.ultimoRelevo) / 1000)} s desde el último bloque` : ''));
+    if(usaAudio() && playing && interrupcion){ MV.interrumpido = Date.now(); diag('→ era una interrupción: espera y sigue sola'); reintentar(); return; }
+    stop();
+  });
   h('previoustrack', ()=>{ sincronizarAU(); jump(idx-1); }); h('nexttrack', ()=>{ sincronizarAU(); jump(idx+1); });
   h('seekbackward', ()=>{ if(isAudioDoc() && zipUrl) audioZip.currentTime = Math.max(0, audioZip.currentTime-15); else jump(idx-2); });
   h('seekforward', ()=>{ if(isAudioDoc() && zipUrl) audioZip.currentTime = Math.min(audioZip.duration||1e9, audioZip.currentTime+15); else jump(idx+2); });
