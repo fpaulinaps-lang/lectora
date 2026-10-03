@@ -53,9 +53,11 @@ const api = {
     return Float32Array.from(r.output.data);
   },
 };
-self.onmessage = async e => {
-  const {id, fn, args} = e.data;
+// Un pedido a la vez, en orden (ONNX Runtime no admite dos cálculos simultáneos en la misma sesión).
+let fila = Promise.resolve();
+self.onmessage = e => { fila = fila.then(() => atender(e.data)); };
+async function atender({id, fn, args}){
   try{ const r = await api[fn](...args); self.postMessage({id, ok: true, r}, r instanceof Float32Array ? [r.buffer] : []); }
   catch(err){ self.postMessage({id, ok: false, error: fn + ': ' + String(err && err.message || err)}); }
-};
+}
 self.postMessage({listo: true});

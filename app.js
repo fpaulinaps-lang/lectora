@@ -937,46 +937,57 @@ $('#mvPrep').onclick = prepararMV;
 // falta preparar nada. Se escuchan como un audio normal: siguen en otras apps y con el teléfono bloqueado.
 const esNatural = () => modo === 'natural' && doc && !isAudioDoc();
 const usaAudio = () => esMiVoz() || esNatural();
-const ADELANTE_SEG = 360;     // cuánto audio se genera por adelantado (después descansa: menos batería)
-const NA = {w: null, n: 0, pend: new Map(), cargadas: new Map(), audio: new Map(), sr: 22050,
-            tok: 0, pos: -1, corre: false, despertar: null, esperas: new Map()};
+// Lo generado se guarda en el teléfono (no en la memoria) y, mientras escuchas, se adelanta hasta 45 minutos.
+// Así, si el iPhone frena el trabajo con la pantalla bloqueada o en otra app, queda reserva de sobra, y al
+// pausar y retomar todo está listo. Lo ya escuchado se borra; solo se guarda lo que viene (unos 2 MB por minuto).
+const ADELANTE_SEG = 45 * 60;
+// Dos procesos generan a la vez (casi el doble de rápido en un teléfono con varios núcleos); si el segundo
+// falla (poca memoria), se sigue con uno.
+const NA = {ws: [], max: 2, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
+            tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), enCurso: new Map(), pref: null};
 
-function procesoNA(){
-  if(NA.w) return NA.w;
-  NA.w = new Worker('voz/piper-worker.js', {type: 'module'});
-  NA.w.onmessage = e => {
+function procesoNA(k){
+  if(NA.ws[k]) return NA.ws[k];
+  const w = NA.ws[k] = new Worker('voz/piper-worker.js', {type: 'module'});
+  w.onmessage = e => {
     const {id, ok, r, error} = e.data; const p = NA.pend.get(id); if(!p) return;
     NA.pend.delete(id); ok ? p.res(r) : p.rej(new Error(error));
   };
-  NA.w.onerror = e => { for(const p of NA.pend.values()) p.rej(new Error(e.message || 'La voz natural falló.')); NA.pend.clear(); };
-  return NA.w;
+  w.onerror = e => {
+    for(const [id, p] of [...NA.pend]) if(p.k === k){ NA.pend.delete(id); p.rej(new Error(e.message || 'La voz natural falló.')); }
+    NA.ws[k] = null;
+    for(const c of [...NA.cargadas.keys()]) if(c.startsWith(k + '|')) NA.cargadas.delete(c);
+  };
+  return w;
 }
-const llamarNA = (fn, args, transferir = []) => new Promise((res, rej) => {
-  const id = ++NA.n; NA.pend.set(id, {res, rej}); procesoNA().postMessage({id, fn, args}, transferir);
+const llamarNA = (fn, args, transferir = [], k = 0) => new Promise((res, rej) => {
+  const id = ++NA.n; NA.pend.set(id, {res, rej, k}); procesoNA(k).postMessage({id, fn, args}, transferir);
 });
 // Baja el archivo una sola vez y lo deja guardado en el teléfono (sin internet después).
 async function bajarNA(url, avance){
   const c = await caches.open('lectora-voces');
-  const g = await c.match(url);
-  if(g) return g.arrayBuffer();
-  const r = await fetch(url);
-  if(!r.ok) throw new Error('No pude bajar la voz natural. Revisa la conexión (la primera vez necesita internet).');
-  const total = +r.headers.get('content-length') || 0, partes = []; let n = 0;
-  const lector = r.body.getReader();
-  for(;;){ const {done, value} = await lector.read(); if(done) break; partes.push(value); n += value.length; avance(n, total); }
-  const blob = new Blob(partes);
-  await c.put(url, new Response(blob));
-  return blob.arrayBuffer();
+  if(!(await c.match(url))){
+    if(!NA.bajadas.has(url)) NA.bajadas.set(url, (async ()=>{
+      const r = await fetch(url);
+      if(!r.ok) throw new Error('No pude bajar la voz natural. Revisa la conexión (la primera vez necesita internet).');
+      const total = +r.headers.get('content-length') || 0, partes = []; let n = 0;
+      const lector = r.body.getReader();
+      for(;;){ const {done, value} = await lector.read(); if(done) break; partes.push(value); n += value.length; avance(n, total); }
+      await c.put(url, new Response(new Blob(partes)));
+    })().finally(() => NA.bajadas.delete(url)));
+    await NA.bajadas.get(url);
+  }
+  return (await c.match(url)).arrayBuffer();
 }
-function cargarVozNA(l){
-  const v = vozNA(l);
-  if(!NA.cargadas.has(v.id)) NA.cargadas.set(v.id, (async ()=>{
+function cargarVozNA(l, k = 0){
+  const v = vozNA(l), clave = k + '|' + v.id;
+  if(!NA.cargadas.has(clave)) NA.cargadas.set(clave, (async ()=>{
     const avance = (n, t) => showStatus(`Bajando la voz ${v.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || v.mb * 1e6) / 1e6)} MB (solo la primera vez; usa Wi-Fi).`, null, t ? n / t : null);
     const [modelo, config] = await Promise.all([bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx', avance), bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx.json', ()=>{})]);
-    NA.sr = await llamarNA('cargar', [v.id, modelo, config], [modelo, config]);
+    NA.sr = await llamarNA('cargar', [v.id, modelo, config], [modelo, config], k);
     if(!$('#statusProg').hidden) hideStatus();
-  })().catch(e => { NA.cargadas.delete(v.id); throw e; }));
-  return NA.cargadas.get(v.id);
+  })().catch(e => { NA.cargadas.delete(clave); throw e; }));
+  return NA.cargadas.get(clave);
 }
 // Lo que se le pasa a la voz: los títulos en MAYÚSCULAS se escriben normal (si no, deletrea siglas)
 // y terminan en punto, para que la entonación baje como al anunciar un capítulo.
@@ -994,7 +1005,6 @@ function recortarNA(a){
   const m = Math.round(NA.sr * 0.03);
   return a.subarray(Math.max(0, i - m), Math.min(a.length, j + m));
 }
-const segundosNA = () => { let n = 0; for(const x of NA.audio.values()) n += x.a.length; return n / NA.sr; };
 // Una frase larga (o que sigue en la página siguiente) quedó partida en trozos: se genera entera, para que
 // la entonación sea la de una sola frase. Devuelve el último trozo.
 const FIN_FRASE = /[.!?…:;]["'»”’)\]]*$/;
@@ -1007,59 +1017,110 @@ function finUnidad(i){
   }
   return j;
 }
+
+/* ---------- Lo generado, guardado en el teléfono ---------- */
+// clave: na|libro|voces|frase|hasta|muestras (así se sabe qué hay sin leer el audio)
+const firmaNA = () => `na|${doc.key}|${vozNA('es').id}+${vozNA('en').id}|`;
+async function discoNA(){
+  const pref = firmaNA();
+  if(NA.pref === pref) return;
+  NA.pref = pref; NA.hechas = new Map();
+  const ks = await kv.keys('pistas', pref) || [];
+  if(NA.pref !== pref) return;
+  for(const k of ks){
+    const [i, hasta, n] = k.slice(pref.length).split('|').map(Number);
+    if(!NA.hechas.has(i)) NA.hechas.set(i, {hasta, n, k});
+  }
+  // lo de otros libros u otras voces ya no se usa: se borra
+  const otros = new Set();
+  for(const k of await kv.keys('pistas', 'na|') || []) if(!k.startsWith(pref)) otros.add(k.split('|').slice(0, 3).join('|') + '|');
+  for(const p of otros) kv.delPrefix('pistas', p).catch(()=>{});
+}
+const adelanteSeg = () => { let n = 0; for(const [i, h] of NA.hechas) if(i >= idx) n += h.n; return n / NA.sr; };
+function despertarNA(){ const d = NA.dormidos; NA.dormidos = []; d.forEach(r => r()); }
+function mostrarAdelanto(){
+  const el = $('#naAdelanto');
+  if(!el || $('#scrim').hidden || modo !== 'natural' || !doc || isAudioDoc() || NA.pref !== firmaNA()) return;
+  const s = adelanteSeg();
+  el.textContent = s > 30 ? `Listo por adelantado en este libro: ~${fmtTime(s / rate)}.` : '';
+}
+
 async function generarNA(desde){
   const tok = ++NA.tok; NA.pos = desde; NA.corre = true;
-  for(const k of [...NA.audio.keys()]) if(k < desde || k > desde + 3000) NA.audio.delete(k);
+  despertarNA();
   for(const [k, w] of [...NA.esperas]) if(k < desde || k > desde + 4){ NA.esperas.delete(k); w.rej(new Error('detenido')); }
-  try{
-    for(let i = desde; i < flat.length; i++){
-      if(tok !== NA.tok) return;
-      NA.pos = i;
-      if(NA.audio.has(i)){ i = NA.audio.get(i).hasta; continue; }
-      while(segundosNA() > ADELANTE_SEG && !NA.esperas.size){
-        await new Promise(r => NA.despertar = r);
+  const pref = firmaNA();
+  let soltar; const primera = new Promise(r => soltar = r);
+  const trabajar = async k => {
+    // el segundo proceso parte cuando ya suena la primera frase (cargar los dos a la vez demora el comienzo)
+    if(k > 0) await Promise.race([primera, new Promise(r => setTimeout(r, 15000))]);
+    while(tok === NA.tok && k < NA.max){
+      while(adelanteSeg() > ADELANTE_SEG && !NA.esperas.size){
+        await new Promise(r => NA.dormidos.push(r));
         if(tok !== NA.tok) return;
       }
+      // la próxima frase que nadie tiene ni está haciendo
+      let i = NA.pos;
+      while(i < flat.length && (NA.hechas.has(i) || NA.enCurso.has(i))) i = (NA.hechas.has(i) ? NA.hechas.get(i).hasta : NA.enCurso.get(i)) + 1;
+      if(i >= flat.length) return;
       const s = flat[i], hasta = finUnidad(i);
-      let texto = textoNA(s); for(let k = i + 1; k <= hasta; k++) texto += ' ' + textoNA(flat[k]);
-      await cargarVozNA(s.l);
-      if(tok !== NA.tok) return;
-      const a = await llamarNA('hablar', [vozNA(s.l).id, texto]);
-      if(tok !== NA.tok) return;
-      NA.audio.set(i, {a: aEntero(recortarNA(a)), hasta});
-      const w = NA.esperas.get(i); if(w){ NA.esperas.delete(i); w.res(); }
-      i = hasta;
+      NA.pos = hasta + 1; NA.enCurso.set(i, hasta);
+      try{
+        let texto = textoNA(s); for(let j = i + 1; j <= hasta; j++) texto += ' ' + textoNA(flat[j]);
+        await cargarVozNA(s.l, k);
+        const a = await llamarNA('hablar', [vozNA(s.l).id, texto], [], k);
+        if(!doc || firmaNA() !== pref) return;               // cambiaste de libro o de voz
+        const v = empacar(recortarNA(a)), clave = pref + String(i).padStart(7, '0') + '|' + hasta + '|' + v.n;
+        await kv.put('pistas', clave, v);
+        NA.hechas.set(i, {hasta, n: v.n, k: clave}); soltar();
+        const w = NA.esperas.get(i); if(w){ NA.esperas.delete(i); w.res(); }
+        mostrarAdelanto();
+      }catch(e){
+        if(k === 0) throw e;
+        NA.max = 1;                                           // el segundo proceso no pudo: sigue uno solo
+        if(i < NA.pos) NA.pos = i;
+        return;
+      }finally{ NA.enCurso.delete(i); }
     }
-  }catch(e){
-    for(const w of NA.esperas.values()) w.rej(e);
-    NA.esperas.clear();
-  }finally{ if(tok === NA.tok) NA.corre = false; }
+  };
+  try{ await Promise.all(Array.from({length: NA.max}, (_, k) => trabajar(k))); }
+  catch(e){ for(const w of NA.esperas.values()) w.rej(e); NA.esperas.clear(); }
+  finally{ if(tok === NA.tok) NA.corre = false; }
 }
 function pararNA(limpiar){
   NA.tok++; NA.corre = false;
-  if(NA.despertar){ NA.despertar(); NA.despertar = null; }
+  despertarNA();
   for(const w of NA.esperas.values()) w.rej(new Error('detenido'));
   NA.esperas.clear();
-  if(limpiar) NA.audio.clear();
+  if(limpiar){ NA.pref = null; NA.hechas = new Map(); }
 }
 // Espera a que la frase i esté generada (si el generador va a otra parte, lo lleva ahí).
 function esperarNA(i){
-  for(const k of [...NA.audio.keys()]) if(k < i) NA.audio.delete(k);      // lo que quedó atrás ya no sirve
-  if(NA.audio.has(i)) return Promise.resolve();
+  if(NA.hechas.has(i)) return Promise.resolve();
   const p = new Promise((res, rej) => NA.esperas.set(i, {res, rej}));
-  // ¿el generador va a llegar pronto a i como comienzo de frase? (si i es un trozo del medio, no: se reinicia en i)
-  let h = NA.pos, enCamino = false;
-  for(let n = 0; NA.corre && n < 5 && h <= i; n++){ if(h === i){ enCamino = true; break; } h = finUnidad(h) + 1; }
-  if(!enCamino) generarNA(i);
-  else if(NA.despertar){ NA.despertar(); NA.despertar = null; }
+  // ¿ya se está haciendo, o el generador llegará pronto a i como comienzo de frase?
+  let enCamino = NA.corre && NA.enCurso.has(i);
+  for(let h = NA.pos, n = 0; NA.corre && !enCamino && n < 5 && h <= i; n++){
+    if(h === i) enCamino = true;
+    h = (NA.hechas.has(h) ? NA.hechas.get(h).hasta : NA.enCurso.has(h) ? NA.enCurso.get(h) : finUnidad(h)) + 1;
+  }
+  if(!enCamino) generarNA(i); else despertarNA();
   return p;
 }
 const fuenteNA = {
   get sr(){ return NA.sr; }, max: 150,
-  lista: i => NA.audio.has(i),
-  async primera(i){ await esperarNA(i); },
-  audio: async i => NA.audio.get(i),
-  usada(i){ NA.audio.delete(i); if(NA.despertar){ NA.despertar(); NA.despertar = null; } },
+  lista: i => NA.hechas.has(i),
+  async primera(i){ await discoNA(); await esperarNA(i); },
+  async audio(i){
+    const h = NA.hechas.get(i); if(!h) return null;
+    const a = desempacar(await kv.get('pistas', h.k));
+    return a && {a: aEntero(a), hasta: h.hasta};
+  },
+  usada(i){
+    const h = NA.hechas.get(i);
+    if(h){ NA.hechas.delete(i); kv.del('pistas', h.k).catch(()=>{}); }
+    despertarNA();
+  },
 };
 
 /* ================= Escuchar como audio: «Mi voz» preparada y la voz natural ================= */
@@ -1241,7 +1302,7 @@ async function playAU(){
   playing = true; setPlayIcon();
   const yo = ++MV.turno;
   try{
-    if(esNatural() && !NA.audio.has(i)) showStatus('Preparando la voz…');
+    if(esNatural()){ await discoNA(); if(!NA.hechas.has(i)) showStatus('Preparando la voz…'); }
     const b = await armarBloque(i);
     if(yo !== MV.turno || !playing){ if(b) soltarBloque(b, null); return; }
     hideStatus();
@@ -1282,9 +1343,10 @@ for(const el of reproductores){
     if(b.ult + 1 >= flat.length){ finished(); return; }
     if(MV.listo){ relevar(); return; }
     prepararSiguiente();
+    if(esNatural()) showStatus('Generando la voz… (sigue sola en cuanto esté lista)');
     const L = MV.sig ? await MV.sig : null;
     if(MV.pag !== b || !playing) return;
-    if(L && MV.listo){ relevar(); return; }
+    if(L && MV.listo){ hideStatus(); relevar(); return; }
     idx = b.ult + 1;
     stop(); showSentence(true, true); save(true);
     if(esMiVoz()) showStatus('Hasta aquí llega lo preparado con tu voz. Abre «Voz» y toca «Seguir preparando».');
@@ -1532,6 +1594,7 @@ function openSheet(){
   const a = isAudioDoc();
   $('#engineBox').hidden = a; $('#audioNote').hidden = !a;
   setModo(modo); llenarNA();
+  if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(mostrarAdelanto);
   $('#scrim').hidden = false; fillVoices();
 }
 function closeSheet(){ $('#scrim').hidden = true; }
