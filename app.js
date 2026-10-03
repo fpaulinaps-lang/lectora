@@ -941,9 +941,10 @@ const usaAudio = () => esMiVoz() || esNatural();
 // Así, si el iPhone frena el trabajo con la pantalla bloqueada o en otra app, queda reserva de sobra, y al
 // pausar y retomar todo está listo. Lo ya escuchado se borra; solo se guarda lo que viene (unos 2 MB por minuto).
 const ADELANTE_SEG = 45 * 60;
-// Dos procesos generan a la vez (casi el doble de rápido en un teléfono con varios núcleos); si el segundo
-// falla (poca memoria), se sigue con uno.
-const NA = {ws: [], max: 2, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
+// En el computador, dos procesos generan a la vez (casi el doble de rápido). En el teléfono, uno solo:
+// cada proceso necesita cientos de MB y el iPhone cierra la página si se pasa («Ocurrió un problema»).
+const ES_TELEFONO = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const NA = {ws: [], max: ES_TELEFONO ? 1 : 2, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
             tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), enCurso: new Map(), pref: null};
 
 function procesoNA(k){
@@ -960,6 +961,14 @@ function procesoNA(k){
   };
   return w;
 }
+// Cierra los procesos de voz: libera toda su memoria (al cambiar de voz o dejar de usar la natural).
+function cerrarNA(){
+  pararNA(true);
+  for(const w of NA.ws) if(w) w.terminate();
+  NA.ws = []; NA.cargadas.clear();
+  for(const p of NA.pend.values()) p.rej(new Error('detenido'));
+  NA.pend.clear();
+}
 const llamarNA = (fn, args, transferir = [], k = 0) => new Promise((res, rej) => {
   const id = ++NA.n; NA.pend.set(id, {res, rej, k}); procesoNA(k).postMessage({id, fn, args}, transferir);
 });
@@ -970,10 +979,9 @@ async function bajarNA(url, avance){
     if(!NA.bajadas.has(url)) NA.bajadas.set(url, (async ()=>{
       const r = await fetch(url);
       if(!r.ok) throw new Error('No pude bajar la voz natural. Revisa la conexión (la primera vez necesita internet).');
-      const total = +r.headers.get('content-length') || 0, partes = []; let n = 0;
-      const lector = r.body.getReader();
-      for(;;){ const {done, value} = await lector.read(); if(done) break; partes.push(value); n += value.length; avance(n, total); }
-      await c.put(url, new Response(new Blob(partes)));
+      const total = +r.headers.get('content-length') || 0; let n = 0;
+      const contar = new TransformStream({transform(trozo, ctl){ n += trozo.length; avance(n, total); ctl.enqueue(trozo); }});
+      await c.put(url, new Response(r.body.pipeThrough(contar), {headers: {'Content-Type': 'application/octet-stream'}}));
     })().finally(() => NA.bajadas.delete(url)));
     await NA.bajadas.get(url);
   }
@@ -1006,13 +1014,14 @@ function recortarNA(a){
   return a.subarray(Math.max(0, i - m), Math.min(a.length, j + m));
 }
 // Una frase larga (o que sigue en la página siguiente) quedó partida en trozos: se genera entera, para que
-// la entonación sea la de una sola frase. Devuelve el último trozo.
+// la entonación sea la de una sola frase, hasta ~280 letras (más largo, la voz necesita demasiada memoria
+// y el iPhone cierra la página). Devuelve el último trozo.
 const FIN_FRASE = /[.!?…:;]["'»”’)\]]*$/;
 function finUnidad(i){
   let j = i, letras = flat[i].t.length;
   while(j + 1 < flat.length){
     const a = flat[j], b = flat[j + 1];
-    if(FIN_FRASE.test(a.t.trim()) || b.np || b.h || a.h || isHeading(b.t) || isHeading(a.t) || b.l !== a.l || letras + b.t.length > 600) break;
+    if(FIN_FRASE.test(a.t.trim()) || b.np || b.h || a.h || isHeading(b.t) || isHeading(a.t) || b.l !== a.l || letras + b.t.length > 280) break;
     j++; letras += b.t.length + 1;
   }
   return j;
@@ -1444,7 +1453,7 @@ $('#mvTest').onclick = async ()=>{
 function setModo(m){
   if(m !== modo && playing) stop();
   if(m !== modo) olvidarBloques();
-  if(m !== 'natural') pararNA(true);
+  if(m !== 'natural') cerrarNA();
   modo = m; store.set('modo', m);
   document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.modo === m ? 'true' : 'false'));
   document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== m);
@@ -1462,7 +1471,7 @@ function llenarNA(){
       const o = document.createElement('option'); o.value = v.id; o.textContent = `${v.nombre} (${v.mb} MB)`;
       o.selected = v.id === elegida; sel.appendChild(o);
     }
-    sel.onchange = ()=>{ if(playing) stop(); store.set('na:' + l, sel.value); olvidarBloques(); pararNA(true); updateVoiceBtn(); };
+    sel.onchange = ()=>{ if(playing) stop(); store.set('na:' + l, sel.value); olvidarBloques(); cerrarNA(); updateVoiceBtn(); };
   }
 }
 $('#naTest').onclick = async ()=>{

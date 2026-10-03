@@ -4,6 +4,7 @@ import * as ort from '../vendor/ort/ort.wasm.min.mjs';
 
 ort.env.wasm.wasmPaths = new URL('../vendor/ort/', import.meta.url).href;
 ort.env.wasm.numThreads = 1;   // varios hilos dentro de un proceso aparte cuelgan ONNX Runtime
+// (sin «arena» de memoria: devuelve lo usado en cada frase en vez de guardarlo; el iPhone tiene poca)
 const BASE = new URL('../vendor/piper/', import.meta.url).href;
 
 let fonemP = null, salida = null;
@@ -33,7 +34,7 @@ const api = {
   async cargar(id, modelo, config){
     if(!voces[id]){
       const cfg = JSON.parse(new TextDecoder().decode(config));
-      voces[id] = {cfg, ses: await ort.InferenceSession.create(new Uint8Array(modelo), {executionProviders: ['wasm'], graphOptimizationLevel: 'all'})};
+      voces[id] = {cfg, ses: await ort.InferenceSession.create(new Uint8Array(modelo), {executionProviders: ['wasm'], graphOptimizationLevel: 'all', enableCpuMemArena: false, enableMemPattern: false})};
     }
     await fonemizador();
     return voces[id].cfg.audio.sample_rate;
