@@ -40,6 +40,18 @@ const store = {
   del(k){ try{ localStorage.removeItem('lectora:'+k); }catch(e){} }
 };
 
+/* ---------- Diagnóstico ---------- */
+// Lo que pasa mientras se escucha fuera de la app (no se puede ver de otra forma en el iPhone). Se muestra
+// en «Voz» › Diagnóstico, para mandar una captura si algo falla. Solo queda en este teléfono.
+function diag(msg){
+  const l = store.get('diag', []);
+  l.push(new Date().toTimeString().slice(0, 8) + ' ' + msg);
+  while(l.length > 120) l.shift();
+  store.set('diag', l);
+}
+// si al abrir la app seguía marcada «leyendo», el iPhone la cerró mientras sonaba
+if(store.get('sonando')){ diag('⚠ La app se cerró mientras leía (la cerró el iPhone por memoria o procesador, o la cerraste tú)'); store.set('sonando', false); }
+
 /* ---------- IndexedDB: libros, audios del Mac, voz ya generada y tu grabación ---------- */
 let dbp = null;
 function idb(){
@@ -1083,15 +1095,24 @@ async function generarNA(desde){
         let texto = textoNA(s); for(let j = i + 1; j <= hasta; j++) texto += ' ' + textoNA(flat[j]);
         await cargarVozNA(s.l, k);
         if(tok !== NA.tok && !NA.esperas.has(i)) return;
+        const t0 = performance.now();
         const a = await llamarNA('hablar', [vozNA(s.l).id, texto], [], k);
+        const ms = performance.now() - t0;
         if(!doc || firmaNA() !== pref) return;               // cambiaste de libro o de voz
         const v = empacar(recortarNA(a)), clave = pref + String(i).padStart(7, '0') + '|' + hasta + '|' + v.n;
         await kv.put('pistas', clave, v);
         NA.hechas.set(i, {hasta, n: v.n, k: clave}); soltar();
         const w = NA.esperas.get(i); if(w){ NA.esperas.delete(i); w.res(); }
+        // Fuera de la app, el iPhone cierra a la que usa mucho procesador por un minuto: se genera una frase
+        // y se descansa 1,5 veces lo que tomó (40 % del procesador; igual va más rápido que la lectura).
+        if(document.visibilityState === 'hidden'){
+          diag(`generó ${(v.n / NA.sr).toFixed(0)} s de voz en ${(ms / 1000).toFixed(1)} s · listo ${Math.round(adelanteSeg())} s`);
+          if(!NA.esperas.size) await new Promise(r => setTimeout(r, ms * 1.5));
+        }
         mostrarAdelanto();
       }catch(e){
         if(tok !== NA.tok || !doc || firmaNA() !== pref){ if(i < NA.pos) NA.pos = i; return; }   // cambiaste de voz a mitad
+        diag('error de la voz: ' + (e && e.message || e));
         if(k === 0) throw e;
         NA.max = 1;                                           // el segundo proceso no pudo: sigue uno solo
         if(i < NA.pos) NA.pos = i;
@@ -1291,7 +1312,7 @@ function revisarRelevo(){
   if(MV.listo){ if(quedan <= 0.15) relevar(); return; }
   // la voz natural todavía no tiene lo que sigue: esperar dando vueltas en el silencio final
   if(quedan < 0 && esNatural() && b.ult + 1 < flat.length){
-    if(!MV.esperando){ MV.esperando = Date.now(); if(document.visibilityState === 'visible') showStatus('Generando la voz… (sigue sola en cuanto esté lista)'); }
+    if(!MV.esperando){ MV.esperando = Date.now(); diag('esperando la voz (en silencio)'); if(document.visibilityState === 'visible') showStatus('Generando la voz… (sigue sola en cuanto esté lista)'); }
     if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; idx = b.ult + 1; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
     if(audioVoz.currentTime > b.fin + COLA - 6) audioVoz.currentTime = b.fin + 0.5;
   }
@@ -1309,9 +1330,11 @@ async function relevar(){
   try{ await audioVoz.play(); }
   catch(e){
     if(audioVoz !== L.el) return;
+    diag('el iPhone no dejó seguir con el bloque siguiente: ' + (e && e.name));
     stop(); showStatus('El teléfono detuvo la lectura. Toca reproducir para seguir.'); return;
   }
   viejo.pause(); soltarBloque(bViejo, viejo);
+  if(document.visibilityState === 'hidden') diag(`siguiente bloque: ${Math.round(L.b.fin)} s`);
   seguirGenerando();
   prepararSiguiente();
   save(true);
@@ -1417,7 +1440,8 @@ for(const el of reproductores){
       if(!playing || el !== audioVoz || !el.paused) return;
       const interrupcion = sesionInterrumpida() || Date.now() - (MV.ultimaInterrupcion || 0) < 3000
         || (!navigator.audioSession && document.visibilityState === 'hidden');
-      if(interrupcion){ MV.interrumpido = Date.now(); reintentar(); return; }
+      if(interrupcion){ MV.interrumpido = Date.now(); diag('interrupción del sistema (notificación, llamada…): espera'); reintentar(); return; }
+      diag('pausa desde fuera (audífonos, centro de control…)');
       playing = false; setPlayIcon(); save(true); pararNA(false); clearTimeout(MV.relevoT);
     }, 350);
   }));
@@ -1431,7 +1455,7 @@ function reintentar(){
   if(!MV.interrumpido || !playing) return;
   if(Date.now() - MV.interrumpido > 10 * 60 * 1000){ MV.interrumpido = 0; playing = false; setPlayIcon(); save(true); return; }
   if(!sesionInterrumpida()){
-    audioVoz.play().then(()=>{ MV.interrumpido = 0; programarRelevo(); }).catch(()=>{});
+    audioVoz.play().then(()=>{ MV.interrumpido = 0; diag('siguió tras la interrupción'); programarRelevo(); }).catch(()=>{});
   }
   MV.reintento = setTimeout(reintentar, sesionInterrumpida() ? 3000 : 1500);
 }
@@ -1440,6 +1464,7 @@ try{ navigator.audioSession && navigator.audioSession.addEventListener('statecha
   else if(MV.interrumpido) reintentar();
 }); }catch(e){}
 document.addEventListener('visibilitychange', ()=>{
+  if(playing) diag((document.visibilityState === 'hidden' ? '→ saliste de la app' : '← volviste a la app') + (usaAudio() && MV.pag ? ` · bloque ${Math.round(audioVoz.currentTime)}/${Math.round(MV.pag.fin)} s · listo ${Math.round(adelanteSeg())} s` : ''));
   if(document.visibilityState === 'visible' && MV.interrumpido) reintentar();
   if(!usaAudio() || !MV.pag) return;
   sincronizarAU();
@@ -1561,6 +1586,7 @@ $('#naTest').onclick = async ()=>{
 async function play(){
   if(!flat.length) return;
   hideStatus();
+  diag('▶ leer (' + modo + ')'); store.set('sonando', true);
   if(isAudioDoc()){
     if(!(await ensureZipAudio())) return;
     playing = true; setPlayIcon();
@@ -1580,6 +1606,8 @@ async function play(){
 }
 function stop(){
   const was = playing;
+  if(was) diag('■ detenida' + (document.visibilityState === 'hidden' ? ' (fuera de la app)' : ''));
+  store.set('sonando', false);
   playing = false; token++; vigilar(false); clearTimeout(negroTimer);
   if(synth) synth.cancel();
   if(!audioZip.paused) audioZip.pause();
@@ -1673,6 +1701,7 @@ function openSheet(){
   const a = isAudioDoc();
   $('#engineBox').hidden = a; $('#audioNote').hidden = !a;
   setModo(modo); llenarNA();
+  $('#diagTexto').textContent = store.get('diag', []).slice().reverse().join('\n') || 'Todavía no hay nada anotado.';
   if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(mostrarAdelanto);
   $('#scrim').hidden = false; fillVoices();
 }

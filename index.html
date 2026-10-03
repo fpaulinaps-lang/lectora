@@ -131,6 +131,9 @@ body.leyendo main{padding-block:14px 190px}
 .seg button{border:0; background:transparent; padding:10px 6px; font-size:.9rem; font-weight:700; color:var(--muted); border-left:1px solid var(--line)}
 .seg button:first-child{border-left:0}
 .seg button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
+.diag{margin:14px 0}
+.diag summary{font-weight:700; color:var(--muted); cursor:pointer; padding:6px 0}
+.diag pre{white-space:pre-wrap; word-break:break-word; font-size:.72rem; line-height:1.45; max-height:260px; overflow:auto; background:var(--paper); color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:10px; margin:6px 0 0}
 .script{font-family:var(--read); font-size:1.05rem; line-height:1.6; background:var(--bg); border-radius:10px; padding:12px 14px; margin:0}
 .meter{height:10px; border-radius:5px; background:var(--line); overflow:hidden}
 .meter i{display:block; height:100%; width:0; background:var(--accent); transition:width .08s}
@@ -261,6 +264,12 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       <span class="lbl">Velocidad</span>
       <div class="row"><input type="range" id="rate" min="0.6" max="2.2" step="0.05" value="1"><b id="rateVal" style="font-variant-numeric:tabular-nums;min-width:3.5em;text-align:right">1,0×</b></div>
     </div>
+
+    <details class="diag">
+      <summary>Diagnóstico</summary>
+      <p class="hint">Lo que pasó mientras escuchabas, lo más nuevo arriba. Si la lectura se detiene sola, manda una captura de esto. Solo queda en tu teléfono.</p>
+      <pre id="diagTexto"></pre>
+    </details>
 
     <div class="tips">
       <span class="lbl">Si usas la voz del teléfono</span>
