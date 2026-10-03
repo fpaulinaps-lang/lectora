@@ -413,7 +413,7 @@ function setDoc(d, pos){
   $('#pageInput').max = d.pages.length;
   store.set('last', d.key);
   if(zipUrl){ URL.revokeObjectURL(zipUrl); zipUrl = null; audioZip.removeAttribute('src'); audioZip.load(); }
-  MV.pref = null; MV.pag = null; MV.sig = null; pararNA(true);
+  MV.pref = null; olvidarBloques(); pararNA(true);
   if(MV.prep){ MV.prep = false; MV.prepTok++; store.del('prepActiva'); }
   $('#blackBtn').hidden = isAudioDoc() || modo !== 'telefono';
   updateVoiceBtn();
@@ -526,6 +526,7 @@ function primeAudio(){
   try{
     if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+    setTimeout(()=>{ try{ audioCtx && audioCtx.suspend(); }catch(e){} }, 1500);   // encendido gasta batería
   }catch(e){}
   if(!synthPrimed && synth){
     synthPrimed = true;
@@ -719,9 +720,8 @@ audioZip.addEventListener('play', ()=>{ if(isAudioDoc() && !playing){ playing = 
 // pantalla bloqueada. (Generar en vivo no alcanza en iPhone sin tarjeta gráfica: por eso se prepara antes.)
 const esMiVoz = () => modo === 'mivoz' && doc && !isAudioDoc();
 const SRV = 24000;
-const audioVoz = new Audio(); audioVoz.preload = 'auto';
 const MV = {M: null, configurado: false, tgt: null, base: null, enDisco: new Set(), pref: null, prep: false, prepTok: 0,
-            pag: null, url: null, sig: null, guardado: 0, turno: 0};   // pag/url/sig/turno: el audio que suena (también la voz natural)
+            pag: null, url: null, sig: null, listo: null, relevoT: null, guardado: 0, turno: 0};   // pag/url/sig/turno: el audio que suena (también la voz natural)
 
 // Frases guardadas en 12 bits (1,5 bytes por muestra, ~130 MB por hora de lectura).
 function empacar(a){
@@ -1026,7 +1026,7 @@ async function generarNA(desde){
       if(tok !== NA.tok) return;
       const a = await llamarNA('hablar', [vozNA(s.l).id, texto]);
       if(tok !== NA.tok) return;
-      NA.audio.set(i, {a: recortarNA(a), hasta});
+      NA.audio.set(i, {a: aEntero(recortarNA(a)), hasta});
       const w = NA.esperas.get(i); if(w){ NA.esperas.delete(i); w.res(); }
       i = hasta;
     }
@@ -1055,7 +1055,7 @@ function esperarNA(i){
   return p;
 }
 const fuenteNA = {
-  get sr(){ return NA.sr; }, max: 300,
+  get sr(){ return NA.sr; }, max: 150,
   lista: i => NA.audio.has(i),
   async primera(i){ await esperarNA(i); },
   audio: async i => NA.audio.get(i),
@@ -1068,13 +1068,33 @@ const fuenteNA = {
 // en otra app (gasta menos batería y hay menos riesgo de corte al cambiar de audio). Con la voz natural el
 // primer bloque es corto (empieza a sonar enseguida) y los siguientes crecen a medida que el generador se adelanta.
 const fuenteMV = {
-  sr: SRV, max: 600,
+  sr: SRV, max: 300,
   lista: i => MV.enDisco.has(i),
   async primera(i){ if(!MV.enDisco.has(i)) throw new Error('sin preparar'); },
-  audio: async i => { const a = desempacar(await kv.get('pistas', claveMV(i))); return a && {a, hasta: i}; },
+  audio: async i => { const a = desempacar(await kv.get('pistas', claveMV(i))); return a && {a: aEntero(a), hasta: i}; },
   usada(){},
 };
 const fuenteAU = () => esMiVoz() ? fuenteMV : fuenteNA;
+// Audio en 16 bits: la mitad de memoria que en decimales (iPhone cierra las páginas que usan mucha).
+function aEntero(f){
+  const o = new Int16Array(f.length);
+  for(let i = 0; i < f.length; i++){ const x = Math.max(-1, Math.min(1, f[i])); o[i] = x < 0 ? x * 32768 : x * 32767; }
+  return o;
+}
+function wavDePartes(partes, sr){
+  const n = partes.reduce((x, a) => x + a.length, 0), b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+  const w = (o, t) => { for(let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+  const d = new Int16Array(b, 44, n); let k = 0;
+  for(const a of partes){ d.set(a, k); k += a.length; }
+  return new Blob([b], {type: 'audio/wav'});
+}
+// Cada bloque termina con un silencio extra (COLA): el bloque siguiente empieza en el otro reproductor
+// mientras este todavía suena, así el iPhone nunca ve que el audio «terminó» (si lo ve, con la pantalla
+// bloqueada o en otra app no deja seguir, y la app se duerme).
+const COLA = 2;
 async function armarBloque(desde){
   const F = fuenteAU(), sr = F.sr, partes = [], tiempos = [];
   await F.primera(desde);
@@ -1088,33 +1108,132 @@ async function armarBloque(desde){
     let letras = 0, acc = 0; for(let k = i; k <= hasta; k++) letras += flat[k].t.length;
     for(let k = i; k <= hasta; k++){ tiempos.push({i: k, s: t + dur * acc / letras}); acc += flat[k].t.length; }
     F.usada(i); partes.push(a); t += dur;
-    const pz = new Float32Array(Math.round(pausaTras(hasta) * sr)); partes.push(pz); t += pz.length / sr;
+    const pz = new Int16Array(Math.round(pausaTras(hasta) * sr)); partes.push(pz); t += pz.length / sr;
     ult = i = hasta;
   }
   if(!tiempos.length) return null;
-  const n = partes.reduce((x, a) => x + a.length, 0), todo = new Float32Array(n); let k = 0;
-  for(const a of partes){ todo.set(a, k); k += a.length; }
-  return {desde, ult, tiempos, url: URL.createObjectURL(wav16(todo, sr))};
+  partes.push(new Int16Array(Math.round(COLA * sr)));
+  return {desde, ult, tiempos, fin: t, url: URL.createObjectURL(wavDePartes(partes, sr))};
+}
+
+/* ---------- Dos reproductores que se pasan la posta ---------- */
+const reproductores = [new Audio(), new Audio()];
+reproductores.forEach(el => { el.preload = 'auto'; el.preservesPitch = true; });
+let audioVoz = reproductores[0];
+const otroReproductor = () => reproductores[0] === audioVoz ? reproductores[1] : reproductores[0];
+const SILENCIO = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+// Al tocar «Leer»: el iPhone solo deja sonar después a los reproductores que sonaron con un toque,
+// y la sesión de audio «playback» es la que sigue con la pantalla bloqueada y en otras apps.
+function desbloquearAudio(){
+  try{ if(navigator.audioSession) navigator.audioSession.type = 'playback'; }catch(e){}
+  if(MV.desbloqueado) return;
+  MV.desbloqueado = true;
+  for(const el of reproductores){
+    if(!el.paused) continue;
+    el.src = SILENCIO;
+    el.play().then(() => { if(el.src === SILENCIO) el.pause(); }).catch(() => {});
+  }
+}
+function soltarBloque(b, el){
+  if(el && el.src === b.url){ el.removeAttribute('src'); try{ el.load(); }catch(e){} }
+  setTimeout(() => URL.revokeObjectURL(b.url), 3000);
+}
+function ponerBloque(b){
+  clearTimeout(MV.relevoT); MV.relevoT = null;
+  MV.pag = b; MV.url = b.url; MV.sig = null;
+  if(MV.listo){ soltarBloque(MV.listo.b, MV.listo.el); MV.listo = null; }
 }
 async function sonarBloque(b, desde){
-  if(MV.url && MV.url !== b.url) URL.revokeObjectURL(MV.url);
-  MV.pag = b; MV.url = b.url; MV.sig = null;
-  audioVoz.src = b.url; audioVoz.playbackRate = rate; audioVoz.preservesPitch = true;
+  const viejo = MV.pag;
+  ponerBloque(b);
+  if(viejo && viejo !== b) soltarBloque(viejo, null);
+  audioVoz.src = b.url; audioVoz.playbackRate = rate;
   const t = (b.tiempos.find(x => x.i === desde) || b.tiempos[0]).s;
   const empezar = () => { try{ audioVoz.currentTime = t; }catch(e){} };
   if(t > 0){ if(audioVoz.readyState >= 1) empezar(); else audioVoz.addEventListener('loadedmetadata', empezar, {once: true}); }
   await audioVoz.play();
-  // con «Mi voz» el bloque siguiente se arma mientras suena este (con la natural se arma al terminar,
-  // para juntar todo lo que el generador alcanzó a adelantar)
+  seguirGenerando();
+}
+function seguirGenerando(){
+  if(!esNatural() || NA.corre || !MV.pag) return;
+  const q = (MV.listo ? MV.listo.b.ult : MV.pag.ult) + 1;
+  if(q < flat.length) generarNA(q);
+}
+// El bloque siguiente se arma ~25 s antes de que termine este, y queda cargado en el otro reproductor.
+function prepararSiguiente(){
+  const b = MV.pag;
+  if(!b || MV.sig || MV.listo || !playing) return;
   const q = b.ult + 1;
-  if(esMiVoz() && q < flat.length && fuenteMV.lista(q)) MV.sig = armarBloque(q).catch(() => null);
-  if(esNatural() && q < flat.length && !NA.corre) generarNA(q);
+  if(q >= flat.length) return;
+  const p = MV.sig = (async ()=>{
+    if(esMiVoz()){ await discoMV(); if(!fuenteMV.lista(q)) return null; }
+    const nb = await armarBloque(q);
+    if(!nb) return null;
+    if(MV.pag !== b){ soltarBloque(nb, null); return null; }
+    const el = otroReproductor();
+    el.src = nb.url; el.playbackRate = rate; el.load();
+    MV.listo = {b: nb, el};
+    programarRelevo();
+    return MV.listo;
+  })().catch(() => null).then(r => { if(!r && MV.sig === p) MV.sig = null; return r; });
+}
+function programarRelevo(){
+  clearTimeout(MV.relevoT); MV.relevoT = null;
+  if(!MV.listo || !MV.pag || !playing) return;
+  const ms = (MV.pag.fin - audioVoz.currentTime) / (audioVoz.playbackRate || 1) * 1000;
+  MV.relevoT = setTimeout(() => { MV.relevoT = null; revisarRelevo(); }, Math.max(0, ms - 100));
+}
+function revisarRelevo(){
+  const b = MV.pag;
+  if(!b || !playing || !usaAudio()) return;
+  const quedan = b.fin - audioVoz.currentTime;
+  if(quedan < 25) prepararSiguiente();
+  if(MV.listo && quedan <= 0.15) relevar();
+}
+// El otro reproductor empieza mientras este suena su silencio final; recién después se detiene este.
+async function relevar(){
+  const L = MV.listo;
+  if(!L) return;
+  MV.listo = null;
+  const viejo = audioVoz, bViejo = MV.pag;
+  audioVoz = L.el;
+  ponerBloque(L.b);
+  idx = L.b.desde;
+  audioVoz.playbackRate = rate;
+  try{ await audioVoz.play(); }
+  catch(e){
+    if(audioVoz !== L.el) return;
+    stop(); showStatus('El teléfono detuvo la lectura. Toca reproducir para seguir.'); return;
+  }
+  viejo.pause(); soltarBloque(bViejo, viejo);
+  seguirGenerando();
+  save(true);
+  if(document.visibilityState === 'visible') showSentence(true);
+}
+// Al cambiar de libro, de voz o de tipo de voz, lo ya armado no sirve.
+function olvidarBloques(){
+  clearTimeout(MV.relevoT); MV.relevoT = null;
+  if(MV.listo){ soltarBloque(MV.listo.b, MV.listo.el); MV.listo = null; }
+  if(MV.pag){ soltarBloque(MV.pag, audioVoz); MV.pag = null; }
+  MV.url = null; MV.sig = null;
 }
 function avisoSinPreparar(){
   showStatus('Esta parte todavía no está preparada con tu voz. Abre «Voz» y toca «Preparar con mi voz», o elige otra voz.');
 }
 async function playAU(){
+  desbloquearAudio();
   const i = idx;
+  // seguir donde quedó la pausa, sin rearmar nada
+  if(MV.pag && audioVoz.src === MV.pag.url && audioVoz.readyState >= 1){
+    const x = MV.pag.tiempos.find(y => y.i === i);
+    if(x){
+      sincronizarAU();
+      if(idx !== i){ idx = i; try{ audioVoz.currentTime = x.s; }catch(e){} }
+      playing = true; setPlayIcon();
+      try{ await audioVoz.play(); seguirGenerando(); programarRelevo(); return; }
+      catch(e){ playing = false; setPlayIcon(); }
+    }
+  }
   if(esMiVoz()){
     await discoMV();
     if(!fuenteMV.lista(i)){ avisoSinPreparar(); openSheet(); return; }
@@ -1124,7 +1243,7 @@ async function playAU(){
   try{
     if(esNatural() && !NA.audio.has(i)) showStatus('Preparando la voz…');
     const b = await armarBloque(i);
-    if(yo !== MV.turno || !playing) return;
+    if(yo !== MV.turno || !playing){ if(b) soltarBloque(b, null); return; }
     hideStatus();
     if(!b){ stop(); return; }
     await sonarBloque(b, i);
@@ -1144,49 +1263,52 @@ function sincronizarAU(){
   if(cur && cur.i !== idx){ idx = cur.i; return true; }
   return false;
 }
-// Mientras la app no está en pantalla (otra app, teléfono bloqueado) no se hace nada en cada instante:
-// la posición se calcula al volver, al pausar, al terminar cada bloque y al salir de la app.
-audioVoz.addEventListener('timeupdate', ()=>{
-  if(document.visibilityState !== 'visible' || !$('#blackout').hidden) return;
-  if(sincronizarAU()){
-    showSentence(true);
-    if(Date.now() - MV.guardado > 3000){ MV.guardado = Date.now(); save(); }
-  }
-});
+// Solo cuenta lo que hace el reproductor que está sonando (el otro espera su turno).
+const actual = (fn) => e => { if(e.target === audioVoz && usaAudio()) fn(e); };
+for(const el of reproductores){
+  // Con la app fuera de pantalla solo se revisa el relevo; la posición se calcula al volver o al pausar.
+  el.addEventListener('timeupdate', actual(()=>{
+    revisarRelevo();
+    if(document.visibilityState !== 'visible' || !$('#blackout').hidden) return;
+    if(sincronizarAU()){
+      showSentence(true);
+      if(Date.now() - MV.guardado > 3000){ MV.guardado = Date.now(); save(); }
+    }
+  }));
+  // Si el relevo no alcanzó (el teléfono se demoró), se hace al terminar.
+  el.addEventListener('ended', actual(async ()=>{
+    if(!playing || !MV.pag) return;
+    const b = MV.pag;
+    if(b.ult + 1 >= flat.length){ finished(); return; }
+    if(MV.listo){ relevar(); return; }
+    prepararSiguiente();
+    const L = MV.sig ? await MV.sig : null;
+    if(MV.pag !== b || !playing) return;
+    if(L && MV.listo){ relevar(); return; }
+    idx = b.ult + 1;
+    stop(); showSentence(true, true); save(true);
+    if(esMiVoz()) showStatus('Hasta aquí llega lo preparado con tu voz. Abre «Voz» y toca «Seguir preparando».');
+    else showStatus('La voz se detuvo. Toca reproducir para seguir.');
+  }));
+  // (al saltar a otra parte, la pausa la hace la app: no es que hayas pausado)
+  el.addEventListener('pause', actual(()=>{
+    if(MV.callar){ MV.callar = false; return; }
+    if(el.src === SILENCIO) return;
+    sincronizarAU();
+    if(playing && !el.ended && el.currentTime > 0.2){ playing = false; setPlayIcon(); save(true); pararNA(false); clearTimeout(MV.relevoT); }
+  }));
+  el.addEventListener('play', actual(()=>{ if(!playing && el.src !== SILENCIO){ playing = true; setPlayIcon(); } }));
+}
 document.addEventListener('visibilitychange', ()=>{
   if(!usaAudio() || !MV.pag) return;
   sincronizarAU();
   if(document.visibilityState === 'visible') showSentence(true); else save(true);
 });
-audioVoz.addEventListener('ended', async ()=>{
-  if(!usaAudio() || !playing || !MV.pag) return;
-  const q = MV.pag.ult + 1, yo = ++MV.turno;
-  if(q >= flat.length){ finished(); return; }
-  idx = q; save(true);
-  let b = MV.sig ? await MV.sig : null;
-  try{
-    if(!b || b.desde !== q){
-      if(esMiVoz()){ await discoMV(); if(!fuenteMV.lista(q)) throw new Error('sin preparar'); }
-      b = await armarBloque(q);
-    }
-    if(yo !== MV.turno || !playing) return;
-    if(!b) throw new Error('vacío');
-    await sonarBloque(b, q);
-  }catch(e){
-    if(yo !== MV.turno || (e && e.message === 'detenido')) return;
-    stop(); showSentence(true, true); save(true);
-    if(esMiVoz()) showStatus('Hasta aquí llega lo preparado con tu voz. Abre «Voz» y toca «Seguir preparando».');
-    else showStatus((e && e.message) || 'La voz se detuvo. Toca reproducir para seguir.');
-  }
-});
-// (al saltar a otra parte, la pausa la hace la app: no es que hayas pausado)
-audioVoz.addEventListener('pause', ()=>{ if(MV.callar){ MV.callar = false; return; } sincronizarAU(); if(usaAudio() && playing && !audioVoz.ended && audioVoz.currentTime > 0.2){ playing = false; setPlayIcon(); save(true); pararNA(false); } });
-audioVoz.addEventListener('play', ()=>{ if(usaAudio() && !playing){ playing = true; setPlayIcon(); } });
 async function saltarAU(i){
   if(!playing){ showSentence(true, true); save(); return; }
   const x = MV.pag && MV.pag.tiempos.find(y => y.i === i);
-  if(x && !audioVoz.paused){ audioVoz.currentTime = x.s; showSentence(true, true); return; }
-  MV.turno++; MV.sig = null;
+  if(x && !audioVoz.paused){ audioVoz.currentTime = x.s; showSentence(true, true); programarRelevo(); return; }
+  MV.turno++;
   if(!audioVoz.paused){ MV.callar = true; audioVoz.pause(); }
   showSentence(true, true);
   await playAU();
@@ -1259,6 +1381,7 @@ $('#mvTest').onclick = async ()=>{
 /* ---------- Elegir entre la voz del teléfono y la tuya ---------- */
 function setModo(m){
   if(m !== modo && playing) stop();
+  if(m !== modo) olvidarBloques();
   if(m !== 'natural') pararNA(true);
   modo = m; store.set('modo', m);
   document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.modo === m ? 'true' : 'false'));
@@ -1277,7 +1400,7 @@ function llenarNA(){
       const o = document.createElement('option'); o.value = v.id; o.textContent = `${v.nombre} (${v.mb} MB)`;
       o.selected = v.id === elegida; sel.appendChild(o);
     }
-    sel.onchange = ()=>{ if(playing) stop(); store.set('na:' + l, sel.value); pararNA(true); updateVoiceBtn(); };
+    sel.onchange = ()=>{ if(playing) stop(); store.set('na:' + l, sel.value); olvidarBloques(); pararNA(true); updateVoiceBtn(); };
   }
 }
 $('#naTest').onclick = async ()=>{
@@ -1320,7 +1443,7 @@ function stop(){
   if(synth) synth.cancel();
   if(!audioZip.paused) audioZip.pause();
   if(!audioVoz.paused) audioVoz.pause();
-  MV.turno++; pararNA(false);
+  MV.turno++; pararNA(false); clearTimeout(MV.relevoT);
   if(!MV.prep) holdScreen(false);
   if(was) save(true);
   if(doc) setPlayIcon();
@@ -1424,7 +1547,7 @@ function setRate(r){
   rate = Math.round(r*100)/100; store.set('rate', rate);
   const txt = rate.toFixed(rate*10%1 ? 2 : 1).replace('.',',') + '×';
   $('#rateBtn').textContent = txt; $('#rateVal').textContent = txt; $('#rate').value = rate;
-  audioZip.playbackRate = rate; audioVoz.playbackRate = rate;
+  audioZip.playbackRate = rate; reproductores.forEach(el => el.playbackRate = rate); programarRelevo();
   updateMeta();
 }
 $('#rate').oninput = e=> setRate(+e.target.value);
