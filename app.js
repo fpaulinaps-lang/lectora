@@ -391,6 +391,7 @@ async function openBook(key){
     pos = 0; for(let p = 0; p < salto; p++) pos += d.pages[p].length;
   }
   setDoc(d, pos);
+  precalentarNA();
   libUpdate(key, {opened: Date.now()});
   showReader(); window.scrollTo({top:0});
   if(salto) showStatus(`Empieza en la página ${salto + 1}, donde comienza el texto: se saltaron la portada, los créditos y el índice. Para leerlos, ve a la página 1.`);
@@ -944,7 +945,7 @@ const ADELANTE_SEG = 45 * 60;
 // En el computador, dos procesos generan a la vez (casi el doble de rápido). En el teléfono, uno solo:
 // cada proceso necesita cientos de MB y el iPhone cierra la página si se pasa («Ocurrió un problema»).
 const ES_TELEFONO = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const NA = {ws: [], max: ES_TELEFONO ? 1 : 2, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
+const NA = {ws: [], max: ES_TELEFONO ? 1 : 2, limite: Infinity, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
             tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), enCurso: new Map(), pref: null};
 
 function procesoNA(k){
@@ -961,13 +962,12 @@ function procesoNA(k){
   };
   return w;
 }
-// Cierra los procesos de voz: libera toda su memoria (al cambiar de voz o dejar de usar la natural).
-function cerrarNA(){
+// Suelta las voces cargadas (al dejar de usar la natural): el proceso sigue vivo, pero sin su memoria.
+// No se cierra el proceso: en Safari, cerrar y crear procesos una y otra vez va juntando memoria.
+function soltarNA(){
   pararNA(true);
-  for(const w of NA.ws) if(w) w.terminate();
-  NA.ws = []; NA.cargadas.clear();
-  for(const p of NA.pend.values()) p.rej(new Error('detenido'));
-  NA.pend.clear();
+  NA.cargadas.clear();
+  NA.ws.forEach((w, k) => { if(w) llamarNA('soltar', [], [], k).catch(()=>{}); });
 }
 const llamarNA = (fn, args, transferir = [], k = 0) => new Promise((res, rej) => {
   const id = ++NA.n; NA.pend.set(id, {res, rej, k}); procesoNA(k).postMessage({id, fn, args}, transferir);
@@ -988,13 +988,16 @@ async function bajarNA(url, avance){
   return (await c.match(url)).arrayBuffer();
 }
 function cargarVozNA(l, k = 0){
-  const v = vozNA(l), clave = k + '|' + v.id;
+  const idioma = l === 'en' ? 'en' : 'es', v = vozNA(idioma), clave = k + '|' + idioma;
+  // otra voz del mismo idioma: el proceso suelta la anterior al cargar esta
+  if(NA.cargadas.has(clave) && NA.cargadas.get(clave).id !== v.id) NA.cargadas.delete(clave);
   if(!NA.cargadas.has(clave)) NA.cargadas.set(clave, (async ()=>{
     const avance = (n, t) => showStatus(`Bajando la voz ${v.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || v.mb * 1e6) / 1e6)} MB (solo la primera vez; usa Wi-Fi).`, null, t ? n / t : null);
     const [modelo, config] = await Promise.all([bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx', avance), bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx.json', ()=>{})]);
-    NA.sr = await llamarNA('cargar', [v.id, modelo, config], [modelo, config], k);
+    NA.sr = await llamarNA('cargar', [v.id, modelo, config, idioma], [modelo, config], k);
     if(!$('#statusProg').hidden) hideStatus();
-  })().catch(e => { NA.cargadas.delete(clave); throw e; }));
+  })().catch(e => { if(NA.cargadas.get(clave)?.id === v.id) NA.cargadas.delete(clave); throw e; }));
+  NA.cargadas.get(clave).id = v.id;
   return NA.cargadas.get(clave);
 }
 // Lo que se le pasa a la voz: los títulos en MAYÚSCULAS se escriben normal (si no, deletrea siglas)
@@ -1056,6 +1059,7 @@ function mostrarAdelanto(){
 
 async function generarNA(desde){
   const tok = ++NA.tok; NA.pos = desde; NA.corre = true;
+  let reservadas = 0;
   despertarNA();
   for(const [k, w] of [...NA.esperas]) if(k < desde || k > desde + 4){ NA.esperas.delete(k); w.rej(new Error('detenido')); }
   const pref = firmaNA();
@@ -1071,12 +1075,15 @@ async function generarNA(desde){
       // la próxima frase que nadie tiene ni está haciendo
       let i = NA.pos;
       while(i < flat.length && (NA.hechas.has(i) || NA.enCurso.has(i))) i = (NA.hechas.has(i) ? NA.hechas.get(i).hasta : NA.enCurso.get(i)) + 1;
-      if(i >= flat.length) return;
-      const s = flat[i], hasta = finUnidad(i);
+      if(i >= flat.length || reservadas >= NA.limite) return;
+      // la primera de cada tanda va sola (sin juntar trozos): así empieza a sonar antes
+      const s = flat[i], hasta = reservadas === 0 ? i : finUnidad(i);
+      reservadas++;
       NA.pos = hasta + 1; NA.enCurso.set(i, hasta);
       try{
         let texto = textoNA(s); for(let j = i + 1; j <= hasta; j++) texto += ' ' + textoNA(flat[j]);
         await cargarVozNA(s.l, k);
+        if(tok !== NA.tok && !NA.esperas.has(i)) return;
         const a = await llamarNA('hablar', [vozNA(s.l).id, texto], [], k);
         if(!doc || firmaNA() !== pref) return;               // cambiaste de libro o de voz
         const v = empacar(recortarNA(a)), clave = pref + String(i).padStart(7, '0') + '|' + hasta + '|' + v.n;
@@ -1085,6 +1092,7 @@ async function generarNA(desde){
         const w = NA.esperas.get(i); if(w){ NA.esperas.delete(i); w.res(); }
         mostrarAdelanto();
       }catch(e){
+        if(tok !== NA.tok || !doc || firmaNA() !== pref){ if(i < NA.pos) NA.pos = i; return; }   // cambiaste de voz a mitad
         if(k === 0) throw e;
         NA.max = 1;                                           // el segundo proceso no pudo: sigue uno solo
         if(i < NA.pos) NA.pos = i;
@@ -1093,8 +1101,25 @@ async function generarNA(desde){
     }
   };
   try{ await Promise.all(Array.from({length: NA.max}, (_, k) => trabajar(k))); }
-  catch(e){ for(const w of NA.esperas.values()) w.rej(e); NA.esperas.clear(); }
+  catch(e){ if(tok === NA.tok){ for(const w of NA.esperas.values()) w.rej(e); NA.esperas.clear(); } }
   finally{ if(tok === NA.tok) NA.corre = false; }
+}
+// Al abrir un libro (o cambiar de voz) con la voz natural ya bajada: se carga la voz y se genera solo la
+// primera frase, para que al tocar «Leer» suene enseguida. (No baja nada nuevo ni sigue generando.)
+let precalentando = null;
+function precalentarNA(yLeer){
+  clearTimeout(precalentando);
+  precalentando = setTimeout(async ()=>{
+    if(!esNatural() || !flat.length || (playing && !yLeer)) return;
+    try{
+      const l = flat[idx].l, v = vozNA(l), c = await caches.open('lectora-voces');
+      if(!(await c.match(PIPER + v.ruta + '/' + v.id + '.onnx'))){ if(yLeer) play(); return; }
+      await discoNA();
+      if(yLeer){ play(); return; }
+      await cargarVozNA(l, 0);
+      if(!playing && !NA.corre && !NA.hechas.has(idx)){ NA.limite = 1; generarNA(idx); }
+    }catch(e){}
+  }, yLeer ? 0 : 400);
 }
 function pararNA(limpiar){
   NA.tok++; NA.corre = false;
@@ -1117,7 +1142,7 @@ function esperarNA(i){
   return p;
 }
 const fuenteNA = {
-  get sr(){ return NA.sr; }, max: 150,
+  get sr(){ return NA.sr; }, max: 600,
   lista: i => NA.hechas.has(i),
   async primera(i){ await discoNA(); await esperarNA(i); },
   async audio(i){
@@ -1138,7 +1163,7 @@ const fuenteNA = {
 // en otra app (gasta menos batería y hay menos riesgo de corte al cambiar de audio). Con la voz natural el
 // primer bloque es corto (empieza a sonar enseguida) y los siguientes crecen a medida que el generador se adelanta.
 const fuenteMV = {
-  sr: SRV, max: 300,
+  sr: SRV, max: 600,
   lista: i => MV.enDisco.has(i),
   async primera(i){ if(!MV.enDisco.has(i)) throw new Error('sin preparar'); },
   audio: async i => { const a = desempacar(await kv.get('pistas', claveMV(i))); return a && {a: aEntero(a), hasta: i}; },
@@ -1163,8 +1188,9 @@ function wavDePartes(partes, sr){
 }
 // Cada bloque termina con un silencio extra (COLA): el bloque siguiente empieza en el otro reproductor
 // mientras este todavía suena, así el iPhone nunca ve que el audio «terminó» (si lo ve, con la pantalla
-// bloqueada o en otra app no deja seguir, y la app se duerme).
-const COLA = 2;
+// bloqueada o en otra app no deja seguir, y la app se duerme). Si la voz natural todavía no alcanzó a
+// generar lo que sigue, se queda dando vueltas en ese silencio hasta que esté (el audio nunca termina).
+const COLA = 20;
 async function armarBloque(desde){
   const F = fuenteAU(), sr = F.sr, partes = [], tiempos = [];
   await F.primera(desde);
@@ -1211,6 +1237,7 @@ function soltarBloque(b, el){
 function ponerBloque(b){
   clearTimeout(MV.relevoT); MV.relevoT = null;
   MV.pag = b; MV.url = b.url; MV.sig = null;
+  if(MV.esperando){ MV.esperando = 0; hideStatus(); }
   if(MV.listo){ soltarBloque(MV.listo.b, MV.listo.el); MV.listo = null; }
 }
 async function sonarBloque(b, desde){
@@ -1223,13 +1250,16 @@ async function sonarBloque(b, desde){
   if(t > 0){ if(audioVoz.readyState >= 1) empezar(); else audioVoz.addEventListener('loadedmetadata', empezar, {once: true}); }
   await audioVoz.play();
   seguirGenerando();
+  prepararSiguiente();
 }
 function seguirGenerando(){
+  NA.limite = Infinity;
   if(!esNatural() || NA.corre || !MV.pag) return;
   const q = (MV.listo ? MV.listo.b.ult : MV.pag.ult) + 1;
   if(q < flat.length) generarNA(q);
 }
-// El bloque siguiente se arma ~25 s antes de que termine este, y queda cargado en el otro reproductor.
+// El bloque siguiente se arma apenas empieza este (con la pantalla bloqueada, el iPhone puede tardar en
+// avisar que el audio va terminando) y queda cargado en el otro reproductor.
 function prepararSiguiente(){
   const b = MV.pag;
   if(!b || MV.sig || MV.listo || !playing) return;
@@ -1243,7 +1273,8 @@ function prepararSiguiente(){
     const el = otroReproductor();
     el.src = nb.url; el.playbackRate = rate; el.load();
     MV.listo = {b: nb, el};
-    programarRelevo();
+    if(audioVoz.currentTime >= b.fin - 0.15) relevar();      // ya estaba esperando en el silencio final
+    else programarRelevo();
     return MV.listo;
   })().catch(() => null).then(r => { if(!r && MV.sig === p) MV.sig = null; return r; });
 }
@@ -1257,8 +1288,14 @@ function revisarRelevo(){
   const b = MV.pag;
   if(!b || !playing || !usaAudio()) return;
   const quedan = b.fin - audioVoz.currentTime;
-  if(quedan < 25) prepararSiguiente();
-  if(MV.listo && quedan <= 0.15) relevar();
+  if(!MV.listo) prepararSiguiente();
+  if(MV.listo){ if(quedan <= 0.15) relevar(); return; }
+  // la voz natural todavía no tiene lo que sigue: esperar dando vueltas en el silencio final
+  if(quedan < 0 && esNatural() && b.ult + 1 < flat.length){
+    if(!MV.esperando){ MV.esperando = Date.now(); if(document.visibilityState === 'visible') showStatus('Generando la voz… (sigue sola en cuanto esté lista)'); }
+    if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; idx = b.ult + 1; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
+    if(audioVoz.currentTime > b.fin + COLA - 6) audioVoz.currentTime = b.fin + 0.5;
+  }
 }
 // El otro reproductor empieza mientras este suena su silencio final; recién después se detiene este.
 async function relevar(){
@@ -1277,6 +1314,7 @@ async function relevar(){
   }
   viejo.pause(); soltarBloque(bViejo, viejo);
   seguirGenerando();
+  prepararSiguiente();
   save(true);
   if(document.visibilityState === 'visible') showSentence(true);
 }
@@ -1311,7 +1349,7 @@ async function playAU(){
   playing = true; setPlayIcon();
   const yo = ++MV.turno;
   try{
-    if(esNatural()){ await discoNA(); if(!NA.hechas.has(i)) showStatus('Preparando la voz…'); }
+    if(esNatural()){ NA.limite = Infinity; await discoNA(); if(!NA.hechas.has(i)) showStatus('Preparando la voz…'); }
     const b = await armarBloque(i);
     if(yo !== MV.turno || !playing){ if(b) soltarBloque(b, null); return; }
     hideStatus();
@@ -1352,7 +1390,13 @@ for(const el of reproductores){
     if(b.ult + 1 >= flat.length){ finished(); return; }
     if(MV.listo){ relevar(); return; }
     prepararSiguiente();
-    if(esNatural()) showStatus('Generando la voz… (sigue sola en cuanto esté lista)');
+    if(esNatural()){
+      // volver al silencio final y esperar ahí: si el audio queda detenido, el iPhone no deja seguir
+      try{ audioVoz.currentTime = b.fin + 0.5; audioVoz.play().catch(()=>{}); }catch(e){}
+      if(!MV.esperando) MV.esperando = Date.now();
+      showStatus('Generando la voz… (sigue sola en cuanto esté lista)');
+      return;
+    }
     const L = MV.sig ? await MV.sig : null;
     if(MV.pag !== b || !playing) return;
     if(L && MV.listo){ hideStatus(); relevar(); return; }
@@ -1366,11 +1410,38 @@ for(const el of reproductores){
     if(MV.callar){ MV.callar = false; return; }
     if(el.src === SILENCIO) return;
     sincronizarAU();
-    if(playing && !el.ended && el.currentTime > 0.2){ playing = false; setPlayIcon(); save(true); pararNA(false); clearTimeout(MV.relevoT); }
+    if(!playing || el.ended || el.currentTime <= 0.2) return;
+    // Si no fuiste tú (tus pausas pasan por stop()), fue el sistema: una notificación, una llamada, Siri.
+    // Mientras dure, se espera; al terminar, sigue sola. Si no es una interrupción (por ejemplo, sacaste
+    // los audífonos), queda en pausa.
+    setTimeout(()=>{
+      if(!playing || el !== audioVoz || !el.paused) return;
+      const interrupcion = sesionInterrumpida() || Date.now() - (MV.ultimaInterrupcion || 0) < 3000
+        || (!navigator.audioSession && document.visibilityState === 'hidden');
+      if(interrupcion){ MV.interrumpido = Date.now(); reintentar(); return; }
+      playing = false; setPlayIcon(); save(true); pararNA(false); clearTimeout(MV.relevoT);
+    }, 350);
   }));
   el.addEventListener('play', actual(()=>{ if(!playing && el.src !== SILENCIO){ playing = true; setPlayIcon(); } }));
 }
+const sesionInterrumpida = () => { try{ return navigator.audioSession && navigator.audioSession.state === 'interrupted'; }catch(e){ return false; } };
+// Retoma después de una interrupción: apenas el sistema devuelve el audio (o al volver a la app). Se rinde a
+// los 10 minutos (si era una llamada larga, no conviene que siga sola mucho después).
+function reintentar(){
+  clearTimeout(MV.reintento);
+  if(!MV.interrumpido || !playing) return;
+  if(Date.now() - MV.interrumpido > 10 * 60 * 1000){ MV.interrumpido = 0; playing = false; setPlayIcon(); save(true); return; }
+  if(!sesionInterrumpida()){
+    audioVoz.play().then(()=>{ MV.interrumpido = 0; programarRelevo(); }).catch(()=>{});
+  }
+  MV.reintento = setTimeout(reintentar, sesionInterrumpida() ? 3000 : 1500);
+}
+try{ navigator.audioSession && navigator.audioSession.addEventListener('statechange', ()=>{
+  if(sesionInterrumpida()) MV.ultimaInterrupcion = Date.now();
+  else if(MV.interrumpido) reintentar();
+}); }catch(e){}
 document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && MV.interrumpido) reintentar();
   if(!usaAudio() || !MV.pag) return;
   sincronizarAU();
   if(document.visibilityState === 'visible') showSentence(true); else save(true);
@@ -1452,8 +1523,8 @@ $('#mvTest').onclick = async ()=>{
 /* ---------- Elegir entre la voz del teléfono y la tuya ---------- */
 function setModo(m){
   if(m !== modo && playing) stop();
-  if(m !== modo) olvidarBloques();
-  if(m !== 'natural') cerrarNA();
+  if(m !== modo){ olvidarBloques(); if(m === 'natural') setTimeout(() => precalentarNA(), 0); }
+  if(m !== 'natural') soltarNA();
   modo = m; store.set('modo', m);
   document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.modo === m ? 'true' : 'false'));
   document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== m);
@@ -1471,7 +1542,7 @@ function llenarNA(){
       const o = document.createElement('option'); o.value = v.id; o.textContent = `${v.nombre} (${v.mb} MB)`;
       o.selected = v.id === elegida; sel.appendChild(o);
     }
-    sel.onchange = ()=>{ if(playing) stop(); store.set('na:' + l, sel.value); olvidarBloques(); cerrarNA(); updateVoiceBtn(); };
+    sel.onchange = ()=>{ const seguia = playing; if(playing) stop(); store.set('na:' + l, sel.value); olvidarBloques(); pararNA(true); updateVoiceBtn(); precalentarNA(seguia); };
   }
 }
 $('#naTest').onclick = async ()=>{
@@ -1514,7 +1585,7 @@ function stop(){
   if(synth) synth.cancel();
   if(!audioZip.paused) audioZip.pause();
   if(!audioVoz.paused) audioVoz.pause();
-  MV.turno++; pararNA(false); clearTimeout(MV.relevoT);
+  MV.turno++; pararNA(false); clearTimeout(MV.relevoT); clearTimeout(MV.reintento); MV.interrumpido = 0;
   if(!MV.prep) holdScreen(false);
   if(was) save(true);
   if(doc) setPlayIcon();
@@ -2017,7 +2088,7 @@ setRate(rate);
   const last = store.get('last', null);
   if(store.get('view') === 'read' && last){
     const d = last === SAMPLE.key ? SAMPLE : await dbGet(last);
-    if(d){ setDoc(d, store.get('pos:'+d.key, 0)); showReader(); return; }
+    if(d){ setDoc(d, store.get('pos:'+d.key, 0)); showReader(); precalentarNA(); return; }
   }
   showLibrary();
 })().then(()=> retomarPreparacion());

@@ -30,8 +30,18 @@ async function fonemas(texto, idioma){
   return ids;
 }
 
+// Una voz por idioma: al cargar otra del mismo idioma se suelta la anterior (así cambiar de voz muchas
+// veces no va juntando memoria hasta que el iPhone cierra la página).
+const porIdioma = {};
+async function soltarVoz(id){
+  const v = voces[id]; if(!v) return;
+  delete voces[id];
+  try{ await v.ses.release(); }catch(e){}
+}
 const api = {
-  async cargar(id, modelo, config){
+  async cargar(id, modelo, config, idioma){
+    if(idioma && porIdioma[idioma] && porIdioma[idioma] !== id) await soltarVoz(porIdioma[idioma]);
+    if(idioma) porIdioma[idioma] = id;
     if(!voces[id]){
       const cfg = JSON.parse(new TextDecoder().decode(config));
       voces[id] = {cfg, ses: await ort.InferenceSession.create(new Uint8Array(modelo), {executionProviders: ['wasm'], graphOptimizationLevel: 'all', enableCpuMemArena: false, enableMemPattern: false})};
@@ -39,9 +49,16 @@ const api = {
     await fonemizador();
     return voces[id].cfg.audio.sample_rate;
   },
+  async soltar(){
+    for(const id of Object.keys(voces)) await soltarVoz(id);
+    for(const k of Object.keys(porIdioma)) delete porIdioma[k];
+    return true;
+  },
   // largo > 1 habla más lento (1,0 = normal); ruido = variación de la entonación
   async hablar(id, texto, largo = 1, ruido){
-    const v = voces[id], inf = v.cfg.inference || {};
+    const v = voces[id];
+    if(!v) throw new Error('voz no cargada');
+    const inf = v.cfg.inference || {};
     const ids = await fonemas(texto, v.cfg.espeak.voice);
     if(!ids.length) return new Float32Array(0);
     const feeds = {
