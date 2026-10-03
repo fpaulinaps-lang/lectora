@@ -942,10 +942,9 @@ const usaAudio = () => esMiVoz() || esNatural();
 // Así, si el iPhone frena el trabajo con la pantalla bloqueada o en otra app, queda reserva de sobra, y al
 // pausar y retomar todo está listo. Lo ya escuchado se borra; solo se guarda lo que viene (unos 2 MB por minuto).
 const ADELANTE_SEG = 45 * 60;
-// En el computador, dos procesos generan a la vez (casi el doble de rápido). En el teléfono, uno solo:
-// cada proceso necesita cientos de MB y el iPhone cierra la página si se pasa («Ocurrió un problema»).
-const ES_TELEFONO = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const NA = {ws: [], max: ES_TELEFONO ? 1 : 2, limite: Infinity, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
+// Un solo proceso genera la voz: cada uno necesita cientos de MB y el iPhone cierra la página si se pasa
+// («Ocurrió un problema»). (La app es solo para celular.)
+const NA = {ws: [], max: 1, limite: Infinity, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
             tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), enCurso: new Map(), pref: null};
 
 function procesoNA(k){
