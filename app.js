@@ -1257,6 +1257,7 @@ const SILENCIO = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+
 // y la sesión de audio «playback» es la que sigue con la pantalla bloqueada y en otras apps.
 function desbloquearAudio(){
   try{ if(navigator.audioSession) navigator.audioSession.type = 'playback'; }catch(e){}
+  reproductores.forEach(el => { try{ el.disableRemotePlayback = true; }catch(e){} });
   if(MV.desbloqueado) return;
   MV.desbloqueado = true;
   for(const el of reproductores){
@@ -1358,16 +1359,214 @@ async function relevar(){
 }
 // Al cambiar de libro, de voz o de tipo de voz, lo ya armado no sirve.
 function olvidarBloques(){
+  if(CONTINUO) cerrarST();
   clearTimeout(MV.relevoT); MV.relevoT = null;
   if(MV.listo){ soltarBloque(MV.listo.b, MV.listo.el); MV.listo = null; }
   if(MV.pag){ soltarBloque(MV.pag, audioVoz); MV.pag = null; }
   MV.url = null; MV.sig = null;
 }
+/* ---------- Un solo reproductor continuo (MediaSource con MP3) ---------- */
+// La voz se convierte a MP3 y se le va agregando al final a un mismo audio mientras suena: nunca hay que
+// cambiar de audio ni de reproductor (el iPhone tomaba esos cambios como una pausa fuera de la app), y si la
+// voz todavía no alcanza, se agrega silencio en vez de dejar que el audio termine. En iPhone usa
+// ManagedMediaSource (iOS 17.1 o más nuevo); donde no exista, quedan los dos reproductores de arriba.
+const MSE = window.ManagedMediaSource || window.MediaSource;
+const CONTINUO = !!MSE && MSE.isTypeSupported('audio/mpeg') && store.get('continuo', true);
+const RETRASO_MP3 = 1105;          // muestras que el codificador MP3 agrega al comienzo
+const CARGADO_SEG = 90;            // cuánto audio se deja cargado por delante en el reproductor
+const ST = {tok: 0, ms: null, sb: null, url: null, sr: 0, muestras: 0, linea: [], sig: 0, fin: false, motivoFin: '', alimentando: false,
+            w: null, n: 0, pend: new Map(), limpiado: 0};
+
+function llamarMP3(fn, extra = {}, transferir = []){
+  if(!ST.w){
+    ST.w = new Worker('voz/mp3-worker.js');
+    ST.w.onmessage = e => { const p = ST.pend.get(e.data.id); if(!p) return; ST.pend.delete(e.data.id); e.data.ok ? p.res(e.data.r) : p.rej(new Error(e.data.error)); };
+    ST.w.onerror = e => { for(const p of ST.pend.values()) p.rej(new Error('MP3: ' + (e.message || 'falló'))); ST.pend.clear(); ST.w = null; };
+  }
+  return new Promise((res, rej) => { const id = ++ST.n; ST.pend.set(id, {res, rej}); ST.w.postMessage({id, fn, ...extra}, transferir); });
+}
+const rangoST = () => {
+  const b = ST.sb && ST.sb.buffered, t = audioVoz.currentTime;
+  if(!b || !b.length) return null;
+  for(let k = 0; k < b.length; k++) if(b.start(k) <= t + 0.3 && t < b.end(k)) return [b.start(k), b.end(k)];
+  return [b.start(b.length - 1), b.end(b.length - 1)];
+};
+const cargadoST = () => { const r = rangoST(); return r ? Math.max(0, r[1] - audioVoz.currentTime) : 0; };
+const enBufferST = t => { const b = ST.sb && ST.sb.buffered; if(!b) return false; for(let k = 0; k < b.length; k++) if(b.start(k) <= t && t < b.end(k) - 0.2) return true; return false; };
+function cerrarST(){
+  ST.tok++; ST.alimentando = false;
+  if(ST.url){ const u = ST.url; setTimeout(() => URL.revokeObjectURL(u), 3000); }
+  ST.ms = ST.sb = ST.url = null; ST.linea = []; ST.fin = false; ST.motivoFin = '';
+}
+function agregarST(bytes){
+  const sb = ST.sb;
+  return new Promise((res, rej) => {
+    const listo = () => { sb.removeEventListener('updateend', listo); sb.removeEventListener('error', mal); res(); };
+    const mal = () => { sb.removeEventListener('updateend', listo); sb.removeEventListener('error', mal); rej(new Error('no se pudo agregar el audio')); };
+    sb.addEventListener('updateend', listo); sb.addEventListener('error', mal);
+    try{ sb.appendBuffer(bytes); }catch(e){ sb.removeEventListener('updateend', listo); sb.removeEventListener('error', mal); rej(e); }
+  });
+}
+async function agregarConEspacioST(bytes){
+  try{ await agregarST(bytes); }
+  catch(e){
+    if(e.name !== 'QuotaExceededError') throw e;
+    await borrarAtrasST(5); await agregarST(bytes);
+  }
+}
+// Lo ya escuchado se saca del reproductor (menos memoria), dejando un poco para retroceder.
+function borrarAtrasST(margen){
+  const hasta = audioVoz.currentTime - margen;
+  if(!ST.sb || hasta < 5 || ST.sb.updating) return Promise.resolve();
+  return new Promise(res => { ST.sb.addEventListener('updateend', res, {once: true}); try{ ST.sb.remove(0, hasta); }catch(e){ res(); } });
+}
+async function abrirST(desde){
+  cerrarST();
+  const tok = ST.tok, F = fuenteAU();
+  ST.alimentando = true;                                   // nadie más agrega audio hasta que esté la primera frase
+  await F.primera(desde);                                  // la voz cargada y la primera frase lista
+  if(tok !== ST.tok) throw new Error('detenido');
+  const ms = new MSE();
+  ST.ms = ms; ST.sr = F.sr; ST.muestras = 0; ST.linea = []; ST.sig = desde; ST.fin = false;
+  audioVoz.disableRemotePlayback = true;                   // lo pide el reproductor continuo del iPhone
+  ST.url = URL.createObjectURL(ms);
+  audioVoz.src = ST.url; audioVoz.playbackRate = rate; audioVoz.preservesPitch = true;
+  await new Promise(r => ms.addEventListener('sourceopen', r, {once: true}));
+  if(tok !== ST.tok) throw new Error('detenido');
+  ST.sb = ms.addSourceBuffer('audio/mpeg'); ST.sb.mode = 'sequence';
+  ms.addEventListener('startstreaming', () => alimentarST());
+  await llamarMP3('nuevo', {sr: ST.sr});
+  await agregarUnidadST(tok);
+  ST.alimentando = false;
+}
+async function agregarUnidadST(tok){
+  const F = fuenteAU(), i = ST.sig;
+  const r = await F.audio(i);
+  if(!r) throw new Error('vacío');
+  if(tok !== ST.tok) throw new Error('detenido');
+  F.usada(i);
+  // una frase generada entera puede cubrir varios trozos: el tiempo de cada uno, según sus letras
+  const {a, hasta} = r, sr = ST.sr, base = (ST.muestras + RETRASO_MP3) / sr, dur = a.length / sr;
+  let letras = 0, acc = 0; for(let k = i; k <= hasta; k++) letras += flat[k].t.length;
+  for(let k = i; k <= hasta; k++){ ST.linea.push({i: k, s: base + dur * acc / letras}); acc += flat[k].t.length; }
+  if(ST.linea.length > 3000) ST.linea.splice(0, ST.linea.length - 2000);
+  const pcm = new Int16Array(a.length + Math.round(pausaTras(hasta) * sr)); pcm.set(a);
+  ST.muestras += pcm.length; ST.sig = hasta + 1;
+  const mp3 = await llamarMP3('codificar', {pcm}, [pcm.buffer]);
+  if(tok !== ST.tok) throw new Error('detenido');
+  await agregarConEspacioST(mp3);
+}
+async function silencioST(tok, seg){
+  const pcm = new Int16Array(Math.round(seg * ST.sr));
+  ST.muestras += pcm.length;
+  const mp3 = await llamarMP3('codificar', {pcm}, [pcm.buffer]);
+  if(tok === ST.tok) await agregarConEspacioST(mp3);
+}
+async function terminarST(tok, motivo){
+  const mp3 = await llamarMP3('terminar');
+  if(tok !== ST.tok) return;
+  if(mp3.length) await agregarConEspacioST(mp3);
+  ST.fin = true; ST.motivoFin = motivo || '';
+  try{ if(ST.ms.readyState === 'open') ST.ms.endOfStream(); }catch(e){}
+}
+const dormir = ms => new Promise(r => setTimeout(r, ms));
+// Agrega audio por delante de lo que suena, hasta tener CARGADO_SEG listos.
+async function alimentarST(){
+  if(ST.alimentando || !ST.sb || ST.fin || !playing) return;
+  ST.alimentando = true;
+  const tok = ST.tok;
+  try{
+    while(tok === ST.tok && playing && cargadoST() < CARGADO_SEG){
+      if(ST.sig >= flat.length){ await terminarST(tok); break; }
+      const F = fuenteAU();
+      if(!F.lista(ST.sig)){
+        if(esMiVoz()){ await terminarST(tok, 'sin preparar'); break; }
+        // la voz natural todavía no tiene lo que sigue: pedirlo y, si lo cargado se acaba, agregar silencio
+        let pedido = null;
+        while(tok === ST.tok && playing && !F.lista(ST.sig)){
+          if(!pedido) pedido = F.primera(ST.sig).catch(() => { pedido = null; });
+          if(cargadoST() < 3){
+            if(!MV.esperando){ MV.esperando = Date.now(); diag('esperando la voz (en silencio)'); if(document.visibilityState === 'visible') showStatus('Generando la voz… (sigue sola en cuanto esté lista)'); }
+            if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
+            await silencioST(tok, 2);
+          }
+          await Promise.race([pedido, dormir(700)]);
+        }
+        if(tok !== ST.tok || !playing) break;
+      }
+      if(MV.esperando){ MV.esperando = 0; hideStatus(); }
+      await agregarUnidadST(tok);
+    }
+    if(tok === ST.tok && audioVoz.currentTime - ST.limpiado > 120){ ST.limpiado = audioVoz.currentTime; await borrarAtrasST(30); }
+  }catch(e){
+    if(tok === ST.tok && e.message !== 'detenido') diag('no se pudo agregar audio: ' + (e.message || e.name));
+  }finally{
+    if(tok === ST.tok) ST.alimentando = false;
+  }
+}
+async function playST(){
+  const i = idx;
+  // seguir donde quedó la pausa, sin rearmar nada
+  const x = ST.linea.find(y => y.i === i);
+  if(ST.sb && !ST.fin && x && enBufferST(x.s)){
+    sincronizarAU();
+    if(idx !== i){ idx = i; try{ audioVoz.currentTime = x.s; }catch(e){} }
+    playing = true; setPlayIcon();
+    try{ await audioVoz.play(); generarAdelanteST(); alimentarST(); return; }
+    catch(e){ playing = false; setPlayIcon(); }
+  }
+  if(esMiVoz()){
+    await discoMV();
+    if(!fuenteMV.lista(i)){ avisoSinPreparar(); openSheet(); return; }
+  }
+  playing = true; setPlayIcon();
+  const yo = ++MV.turno;
+  try{
+    if(esNatural()){ NA.limite = Infinity; await discoNA(); if(!NA.hechas.has(i)) showStatus('Preparando la voz…'); }
+    await abrirST(i);
+    if(yo !== MV.turno || !playing) return;
+    hideStatus();
+    await audioVoz.play();
+    generarAdelanteST();
+    alimentarST();
+  }catch(e){
+    if(yo !== MV.turno) return;
+    playing = false; setPlayIcon();
+    if(e && e.message === 'detenido') return;
+    if(e && e.message === 'sin preparar'){ avisoSinPreparar(); return; }
+    diag('no se pudo reproducir: ' + (e && (e.message || e.name)));
+    showStatus(e && e.name === 'NotAllowedError' ? 'El teléfono no dejó reproducir. Toca el botón otra vez.' : (e && e.message) || 'No se pudo reproducir.', e && e.name === 'NotAllowedError' ? null : 'err');
+  }
+}
+async function saltarST(i){
+  if(!playing){ showSentence(true, true); save(); return; }
+  const x = ST.linea.find(y => y.i === i);
+  if(x && enBufferST(x.s) && !audioVoz.paused){ audioVoz.currentTime = x.s; showSentence(true, true); return; }
+  MV.turno++;
+  if(!audioVoz.paused){ MV.callar = true; audioVoz.pause(); }
+  showSentence(true, true);
+  await playST();
+}
+// la voz natural se sigue generando por adelantado desde lo que viene (hasta 45 min, guardado en el teléfono)
+function generarAdelanteST(){
+  NA.limite = Infinity;
+  if(esNatural() && !NA.corre && ST.sig < flat.length) generarNA(ST.sig);
+}
+function terminadoST(){
+  if(!playing) return;
+  if(ST.motivoFin === 'sin preparar'){
+    idx = Math.min(ST.sig, flat.length - 1); stop(); showSentence(true, true); save(true);
+    showStatus('Hasta aquí llega lo preparado con tu voz. Abre «Voz» y toca «Seguir preparando».');
+  } else if(ST.sig >= flat.length) finished();
+  else { stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); }
+}
+
 function avisoSinPreparar(){
   showStatus('Esta parte todavía no está preparada con tu voz. Abre «Voz» y toca «Preparar con mi voz», o elige otra voz.');
 }
 async function playAU(){
   desbloquearAudio();
+  if(CONTINUO) return playST();
   const i = idx;
   // seguir donde quedó la pausa, sin rearmar nada
   if(MV.pag && audioVoz.src === MV.pag.url && audioVoz.readyState >= 1){
@@ -1404,9 +1603,10 @@ async function playAU(){
 }
 // Frase que está sonando, según el tiempo del audio.
 function sincronizarAU(){
-  if(!usaAudio() || !MV.pag) return false;
-  const t = audioVoz.currentTime; let cur = MV.pag.tiempos[0];
-  for(const x of MV.pag.tiempos){ if(x.s <= t + 0.05) cur = x; else break; }
+  const tiempos = CONTINUO ? ST.linea : MV.pag && MV.pag.tiempos;
+  if(!usaAudio() || !tiempos || !tiempos.length) return false;
+  const t = audioVoz.currentTime; let cur = tiempos[0];
+  for(const x of tiempos){ if(x.s <= t + 0.05) cur = x; else break; }
   if(cur && cur.i !== idx){ idx = cur.i; return true; }
   return false;
 }
@@ -1415,7 +1615,8 @@ const actual = (fn) => e => { if(e.target === audioVoz && usaAudio()) fn(e); };
 for(const el of reproductores){
   // Con la app fuera de pantalla solo se revisa el relevo; la posición se calcula al volver o al pausar.
   el.addEventListener('timeupdate', actual(()=>{
-    revisarRelevo();
+    if(CONTINUO){ if(cargadoST() < CARGADO_SEG - 10) alimentarST(); }
+    else revisarRelevo();
     if(document.visibilityState !== 'visible' || !$('#blackout').hidden) return;
     if(sincronizarAU()){
       showSentence(true);
@@ -1424,6 +1625,7 @@ for(const el of reproductores){
   }));
   // Si el relevo no alcanzó (el teléfono se demoró), se hace al terminar.
   el.addEventListener('ended', actual(async ()=>{
+    if(CONTINUO){ terminadoST(); return; }
     if(!playing || !MV.pag) return;
     const b = MV.pag;
     if(b.ult + 1 >= flat.length){ finished(); return; }
@@ -1484,13 +1686,14 @@ try{ navigator.audioSession && navigator.audioSession.addEventListener('statecha
   else if(MV.interrumpido) reintentar();
 }); }catch(e){}
 document.addEventListener('visibilitychange', ()=>{
-  if(playing) diag((document.visibilityState === 'hidden' ? '→ saliste de la app' : '← volviste a la app') + (usaAudio() && MV.pag ? ` · bloque ${Math.round(audioVoz.currentTime)}/${Math.round(MV.pag.fin)} s · listo ${Math.round(adelanteSeg())} s` : ''));
+  if(playing) diag((document.visibilityState === 'hidden' ? '→ saliste de la app' : '← volviste a la app') + (usaAudio() && CONTINUO && ST.sb ? ` · cargado ${Math.round(cargadoST())} s · listo ${Math.round(adelanteSeg())} s` : usaAudio() && MV.pag ? ` · bloque ${Math.round(audioVoz.currentTime)}/${Math.round(MV.pag.fin)} s · listo ${Math.round(adelanteSeg())} s` : ''));
   if(document.visibilityState === 'visible' && MV.interrumpido) reintentar();
-  if(!usaAudio() || !MV.pag) return;
+  if(!usaAudio() || !(CONTINUO ? ST.sb : MV.pag)) return;
   sincronizarAU();
   if(document.visibilityState === 'visible') showSentence(true); else save(true);
 });
 async function saltarAU(i){
+  if(CONTINUO) return saltarST(i);
   if(!playing){ showSentence(true, true); save(); return; }
   const x = MV.pag && MV.pag.tiempos.find(y => y.i === i);
   if(x && !audioVoz.paused){ audioVoz.currentTime = x.s; showSentence(true, true); programarRelevo(); return; }

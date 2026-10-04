@@ -1,0 +1,2 @@
+lame.min.js: lamejs 1.2.1 (https://github.com/zhuker/lamejs), codificador MP3 en JavaScript, licencia LGPL-3.0 (ver LICENSE), sin cambios.
+LectorLibre lo usa para que la voz suene en un solo reproductor continuo (MediaSource con MP3).
