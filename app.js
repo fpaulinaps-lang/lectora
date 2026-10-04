@@ -966,22 +966,36 @@ function procesoNA(k){
     const {id, ok, r, error} = e.data; const p = NA.pend.get(id); if(!p) return;
     NA.pend.delete(id); ok ? p.res(r) : p.rej(new Error(error));
   };
-  w.onerror = e => {
-    for(const [id, p] of [...NA.pend]) if(p.k === k){ NA.pend.delete(id); p.rej(new Error(e.message || 'La voz natural falló.')); }
-    NA.ws[k] = null;
-    for(const c of [...NA.cargadas.keys()]) if(c.startsWith(k + '|')) NA.cargadas.delete(c);
-  };
+  w.onerror = e => { diag('el proceso de la voz falló: ' + (e.message || 'sin detalle')); reiniciarProceso(k, e.message || 'La voz natural falló.'); };
   return w;
 }
-// Suelta las voces cargadas (al dejar de usar la natural): el proceso sigue vivo, pero sin su memoria.
-// No se cierra el proceso: en Safari, cerrar y crear procesos una y otra vez va juntando memoria.
+// Cierra un proceso de voz y olvida lo que tenía: el siguiente pedido crea uno limpio. Cerrar el proceso
+// es lo único que le devuelve su memoria al iPhone (soltar la voz adentro no la devuelve).
+function reiniciarProceso(k, motivo){
+  const w = NA.ws[k];
+  NA.ws[k] = null;
+  if(w) try{ w.terminate(); }catch(e){}
+  for(const [id, p] of [...NA.pend]) if(p.k === k){ NA.pend.delete(id); clearTimeout(p.t); p.rej(new Error(motivo || 'detenido')); }
+  for(const c of [...NA.cargadas.keys()]) if(c.startsWith(k + '|')) NA.cargadas.delete(c);
+}
+// Al cambiar de voz o dejar de usar la natural: todo de nuevo, sin la memoria de la voz anterior.
 function soltarNA(){
   pararNA(true);
+  NA.ws.forEach((w, k) => reiniciarProceso(k, 'detenido'));
   NA.cargadas.clear();
-  NA.ws.forEach((w, k) => { if(w) llamarNA('soltar', [], [], k).catch(()=>{}); });
 }
+// Si el proceso no contesta (por ejemplo, el iPhone lo cerró por memoria sin avisar), se reinicia en vez de
+// quedar esperando para siempre.
+const ESPERA_NA = {cargar: 60000, hablar: 30000, soltar: 15000};
 const llamarNA = (fn, args, transferir = [], k = 0) => new Promise((res, rej) => {
-  const id = ++NA.n; NA.pend.set(id, {res, rej, k}); procesoNA(k).postMessage({id, fn, args}, transferir);
+  const id = ++NA.n, p = {k, res: r => { clearTimeout(p.t); res(r); }, rej: e => { clearTimeout(p.t); rej(e); }};
+  p.t = setTimeout(() => {
+    if(!NA.pend.has(id)) return;
+    diag(`la voz no respondió (${fn}): se reinicia`);
+    reiniciarProceso(k, 'La voz no respondió. Toca reproducir para intentar de nuevo.');
+  }, ESPERA_NA[fn] || 60000);
+  NA.pend.set(id, p);
+  procesoNA(k).postMessage({id, fn, args}, transferir);
 });
 // Baja el archivo una sola vez y lo deja guardado en el teléfono (sin internet después).
 async function bajarNA(url, avance){
@@ -1127,9 +1141,10 @@ async function generarNA(desde){
 // Al abrir un libro (o cambiar de voz) con la voz natural ya bajada: se carga la voz y se genera solo la
 // primera frase, para que al tocar «Leer» suene enseguida. (No baja nada nuevo ni sigue generando.)
 let precalentando = null;
-function precalentarNA(yLeer){
+function precalentarNA(yLeer, espera){
   clearTimeout(precalentando);
   precalentando = setTimeout(async ()=>{
+    NA.seguir = false;
     if(!esNatural() || !flat.length || (playing && !yLeer)) return;
     try{
       const l = flat[idx].l, v = vozNA(l), c = await caches.open('lectora-voces');
@@ -1139,7 +1154,7 @@ function precalentarNA(yLeer){
       await cargarVozNA(l, 0);
       if(!playing && !NA.corre && !NA.hechas.has(idx)){ NA.limite = 1; generarNA(idx); }
     }catch(e){}
-  }, yLeer ? 0 : 400);
+  }, espera ?? (yLeer ? 0 : 400));
 }
 function pararNA(limpiar){
   NA.tok++; NA.corre = false;
@@ -1383,6 +1398,7 @@ async function playAU(){
     playing = false; setPlayIcon();
     if(e && e.message === 'detenido') return;
     if(e && e.message === 'sin preparar'){ avisoSinPreparar(); return; }
+    diag('no se pudo reproducir: ' + (e && (e.message || e.name)));
     showStatus(e && e.name === 'NotAllowedError' ? 'El teléfono no dejó reproducir. Toca el botón otra vez.' : (e && e.message) || 'No se pudo reproducir.', e && e.name === 'NotAllowedError' ? null : 'err');
   }
 }
@@ -1570,7 +1586,12 @@ function llenarNA(){
       const o = document.createElement('option'); o.value = v.id; o.textContent = `${v.nombre} (${v.mb} MB)`;
       o.selected = v.id === elegida; sel.appendChild(o);
     }
-    sel.onchange = ()=>{ const seguia = playing; if(playing) stop(); store.set('na:' + l, sel.value); olvidarBloques(); pararNA(true); updateVoiceBtn(); precalentarNA(seguia); };
+    sel.onchange = ()=>{
+      const seguia = playing || NA.seguir; if(playing) stop();
+      store.set('na:' + l, sel.value); olvidarBloques(); soltarNA(); updateVoiceBtn();
+      diag('cambiaste la voz a ' + vozNA(l).nombre);
+      NA.seguir = seguia; precalentarNA(seguia, 800);       // si cambias varias veces seguidas, carga solo la última
+    };
   }
 }
 $('#naTest').onclick = async ()=>{
