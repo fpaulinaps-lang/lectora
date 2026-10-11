@@ -1,5 +1,5 @@
 // Guarda la app en el teléfono para que abra sin internet.
-const CACHE = 'lectora-v41';                // la app: se renueva con cada versión
+const CACHE = 'lectora-v42';                // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo: sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
@@ -12,13 +12,23 @@ const ESPERA_RED = 4000;                    // con mala señal, no esperar más 
 // Las librerías de vendor/ no cambian nunca (y el motor pesa 33 MB): esas no se vuelven a pedir.
 const fresco = url => /\/vendor\//.test(url) ? url : url + (url.includes('?') ? '&' : '?') + 'v=' + CACHE;
 
+// Lo imprescindible: si falta, se cancela la actualización. Lo demás (íconos, librerías) puede fallar
+// sin dejar el teléfono pegado en una versión vieja: esas se piden a la red cuando hagan falta.
+const CRITICOS = ['./', 'index.html', 'app.js'];
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => Promise.all(FILES.map(async f => {
-    const url = new URL(f, self.registration.scope).href;
-    const r = await fetch(fresco(url));
-    if (!r.ok) throw new Error('No se pudo guardar ' + f);
-    await c.put(url, r);
-  }))).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(async c => {
+    const fallos = [];
+    await Promise.all(FILES.map(async f => {
+      const url = new URL(f, self.registration.scope).href;
+      try{
+        const r = await fetch(fresco(url));
+        if (!r.ok) throw new Error(r.status);
+        await c.put(url, r);
+      }catch(err){ fallos.push(f); }
+    }));
+    if (fallos.some(f => CRITICOS.includes(f))) throw new Error('No se pudo guardar ' + fallos.join(', '));
+    if (fallos.length) console.warn('LectorLibre: no se pudieron guardar ' + fallos.join(', ') + '; se piden a la red.');
+  }).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   // Se borran las versiones viejas de la app; lo guardado al usarlo (motor de «Mi voz», OCR) se conserva.

@@ -6,7 +6,11 @@ if(pdfjs) pdfjs.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 
 /* ---------- Service worker: sin internet y con varios núcleos para la voz ---------- */
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js').catch(()=>{});
+  // updateViaCache 'none' + update(): sin esto el navegador puede quedarse hasta 10 minutos con la copia
+  // vieja de sw.js en su memoria y el teléfono nunca se entera de que hay una versión nueva.
+  navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'})
+    .then(r => { r.update().catch(()=>{}); })
+    .catch(()=>{});
   // Cuando una versión nueva del service worker toma el control, recargar una vez: así la página
   // queda aislada (COOP/COEP) y la voz puede usar varios núcleos.
   navigator.serviceWorker.addEventListener('controllerchange', ()=>{
@@ -2200,11 +2204,23 @@ function updateVoiceBtn(){
   else if(voiceBy.es) t = voiceBy.es.name.replace(/\s*\(.*\)\s*/,'');
   $('#voiceBtn').textContent = t;
 }
+// Versión del código que está corriendo: sirve para saber si el teléfono se quedó con una copia vieja
+// (tiene que coincidir con CACHE en sw.js; si no coincide, cierra la app y vuelve a abrirla con internet).
+const VERSION_APP = 'v42';
+function verVersion(){
+  const el = $('#verApp'); if(!el) return;
+  caches.keys().then(ks => {
+    const guardado = ks.find(k => /^lectora-v\d+$/.test(k)) || 'sin copia guardada';
+    el.textContent = `Versión de la app: ${VERSION_APP} · guardada en este teléfono: ${guardado}` +
+      (guardado === 'lectora-' + VERSION_APP ? '' : ' (falta actualizar: cierra la app y ábrela otra vez con internet)');
+  }).catch(()=>{});
+}
 function openSheet(){
   const a = isAudioDoc();
   $('#engineBox').hidden = a; $('#audioNote').hidden = !a;
   setModo(modo); llenarNA();
   $('#diagTexto').textContent = store.get('diag', []).slice().reverse().join('\n') || 'Todavía no hay nada anotado.';
+  verVersion();
   if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(()=>{ mostrarAdelanto(); actualizarNA(); });
   $('#scrim').hidden = false; fillVoices();
 }
