@@ -168,7 +168,7 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
     <button class="btn ghost" id="installBtn" hidden>Instalar</button>
     <button class="btn ghost" id="installClose">Entendido</button>
   </div>
-  <div class="status" id="status" hidden><span id="statusText"></span><div class="prog" id="statusProg" hidden><i></i></div></div>
+  <div class="status" id="status" hidden><span id="statusText"></span><button class="btn ghost" id="statusAction" hidden></button><div class="prog" id="statusProg" hidden><i></i></div></div>
 
   <section id="libView">
     <div class="lib-head"><h1>Tu biblioteca</h1><span id="libCount"></span></div>
@@ -220,6 +220,13 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
         <div class="field"><label for="naEn">Voz en inglés</label><select id="naEn"></select></div>
         <div class="row"><button class="btn ghost" id="naTest">Probar la voz</button><span class="hint" id="naNote"></span></div>
         <p class="hint" id="naAdelanto"></p>
+        <div class="panel" id="naPrepBox" hidden>
+          <span class="lbl">Este libro</span>
+          <div class="prog"><i id="naBar"></i></div>
+          <p class="hint" id="naEstado"></p>
+          <div class="row"><button class="btn" id="naPrep">Preparar audio completo</button></div>
+          <p class="hint">Genera todo el audio del libro a máxima velocidad de antemano para que suene de corrido sin interrupciones con la pantalla bloqueada o en otras apps.</p>
+        </div>
       </div>
 
       <div class="panel" data-panel="telefono" hidden>
@@ -233,10 +240,10 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       </div>
 
       <div class="panel" data-panel="mivoz" hidden>
-        <p class="hint">Tu teléfono prepara el libro con tu voz <b>de antemano</b>, y después lo lee de corrido, sin pausas, aunque bloquees la pantalla. Prepararlo tarda: una hora de lectura puede necesitar entre 2 y 6 horas, según el teléfono. Lo mejor es hacerlo de noche, con el teléfono cargando y LectorLibre abierta. La primera vez descarga unos 180 MB (usa Wi-Fi).</p>
+        <p class="hint">Lee tus libros con tu voz usando clonación por inteligencia artificial. Una vez grabada tu voz, <b>puedes tocar «Leer» (▶) directamente</b>: la lectura comienza al vuelo y el teléfono genera las siguientes frases en segundo plano mientras escuchas. La primera vez descarga el motor (~180 MB por única vez; usa Wi-Fi).</p>
         <div id="recEmpty" class="panel">
-          <p class="hint">Primero graba 25 segundos leyendo este texto en voz alta, con tu tono normal y en un lugar sin ruido:</p>
-          <p class="script">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención. Por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden. Hoy voy a leer algunos documentos importantes, página por página, hasta terminarlos.</p>
+          <p class="hint">Primero graba leyendo este texto en voz alta, con tu tono normal y en un lugar sin ruido. Son unos 50 segundos: mientras más leas, mejor queda tu voz.</p>
+          <p class="script" id="recTexto">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención, y por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden solas. Cuando leo en voz alta escucho mejor lo que digo: las palabras pesan distinto y aparecen matices que la lectura silenciosa esconde. Por eso leo despacio, marcando bien cada sonido: la jota de jarra, la erre de carretera, la eñe de años, la zeta de zapato y la lluvia suave sobre la ventana. Hoy voy a leer varios documentos importantes, página por página, hasta terminarlos.</p>
         </div>
         <p class="note" id="recDone" hidden>Tu voz está grabada. La lectura se parece a ti en el tono; no copia exactamente tu acento ni tu manera de hablar.</p>
         <div id="recLive" class="panel" hidden>
@@ -250,12 +257,12 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
         </div>
         <p class="hint" id="mvTestNote"></p>
         <div class="panel" id="mvPrepBox" hidden>
-          <span class="lbl">Este libro</span>
+          <span class="lbl">Pre-generar libro completo (opcional)</span>
           <div class="prog"><i id="mvBar"></i></div>
           <p class="hint" id="mvEstado"></p>
-          <div class="row"><button class="btn" id="mvPrep">Preparar con mi voz</button></div>
+          <div class="row"><button class="btn ghost" id="mvPrep">Pre-generar con mi voz</button></div>
           <p class="hint" id="mvDescarga"></p>
-          <p class="hint">Para que vaya lo más rápido posible: teléfono <b>cargando</b>, <b>Modo de bajo consumo apagado</b> (en Ajustes › Batería; si está prendido, el iPhone frena el procesador), y LectorLibre abierta en pantalla. Las primeras veces LectorLibre prueba cuántos procesos a la vez le convienen a tu teléfono y se queda con lo más rápido.</p>
+          <p class="hint"><b>No es necesario esperar:</b> puedes tocar «Leer» (▶) directamente para escuchar al instante. Esta opción es solo si quieres dejar todo el libro guardado de antemano para ahorrar batería o no procesar en el momento.</p>
         </div>
       </div>
     </div>

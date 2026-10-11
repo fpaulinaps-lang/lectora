@@ -79,25 +79,42 @@ function expandir(u8){
 // Sin ella (iPhone con iOS 18 o anterior): dos procesos con el procesador, uno por núcleo, que trabajan en
 // paralelo. Con tu voz, uno genera la voz natural y el otro le pone tu timbre; con la voz natural, los dos
 // generan frases distintas. (ONNX Runtime se cuelga si usa varios hilos dentro de un proceso aparte.)
+// Un pedido no puede quedar esperando para siempre: si el proceso se cierra (por ejemplo al bajar la
+// cantidad de procesos mientras genera) o se queda pegado, se rechaza y la app lo vuelve a pedir.
+const ESPERA_MOTOR = 180000;   // 3 minutos: una frase tarda segundos, esto es solo una red de seguridad
 function crearProceso(url){
   const w = new Worker(url, {type:'module'});
-  const pendientes = new Map(); let n = 0;
+  const pendientes = new Map(); let n = 0, vivo = true, abrir = null;
   const p = {carga: 0, kokoro: false, conversor: false};
+  const soltar = motivo => { for(const q of [...pendientes.values()]) q.rej(new Error(motivo)); pendientes.clear(); p.carga = 0; };
   p.listo = new Promise((res, rej)=>{
+    abrir = rej;
     w.onmessage = e => {
       if(e.data.listo){ res(e.data); return; }
       const q = pendientes.get(e.data.id); if(!q) return; pendientes.delete(e.data.id); p.carga--;
       e.data.ok ? q.res(e.data.r) : q.rej(new Error(e.data.error));
     };
-    w.onerror = e => rej(new Error('No se pudo iniciar el motor de voz: ' + (e.message || 'error')));
+    w.onerror = e => {
+      const err = new Error('No se pudo iniciar el motor de voz: ' + (e.message || 'error'));
+      if(vivo){ vivo = false; rej(err); } else soltar('El motor de voz se cerró.');
+    };
   });
   p.llamar = (fn, ...args) => new Promise((res, rej)=>{
-    const id = ++n; pendientes.set(id, {res, rej}); p.carga++;
+    const id = ++n;
+    const q = {res: null, rej: null};
+    const t = setTimeout(() => {
+      if(pendientes.get(id) !== q) return;
+      pendientes.delete(id); p.carga--;
+      rej(new Error('La voz tardó demasiado. Toca reproducir para seguir.'));
+    }, ESPERA_MOTOR);
+    q.res = r => { clearTimeout(t); res(r); };
+    q.rej = e => { clearTimeout(t); rej(e); };
+    pendientes.set(id, q); p.carga++;
     // los buffers (también los que van dentro de un objeto) se transfieren en vez de copiarse
     const bufs = args.flatMap(x => x instanceof ArrayBuffer ? [x] : (x && typeof x === 'object' && !ArrayBuffer.isView(x)) ? Object.values(x).filter(v => v instanceof ArrayBuffer) : []);
     w.postMessage({id, fn, args}, bufs);
   });
-  p.terminar = () => w.terminate();
+  p.terminar = () => { vivo = false; soltar('El motor de voz se cerró.'); try{ w.terminate(); }catch(e){} if(abrir) abrir(new Error('cerrado')); };
   return p;
 }
 let procP = null;

@@ -141,7 +141,7 @@ class VozNatural:
 # Tu voz: la voz natural lee el texto y luego un conversor (OpenVoice V2) le pone el timbre de tu grabación.
 # Es liviano (corre más rápido que tiempo real en este Mac); un modelo que clona desde cero tardaba minutos por frase.
 BASES = {"es": ["ef_dora", "em_alex"], "en": ["af_heart", "am_michael"]}
-FRASE_BASE = {"es": "La lectura en voz alta cambia la manera en que entendemos un texto, porque cada frase tiene su ritmo y sus pausas.",
+FRASE_BASE = {"es": "La lectura en voz alta cambia la manera en que entendemos un texto, porque cada frase tiene su ritmo, sus pausas y su intención.",
               "en": "Reading aloud changes the way we understand a text, because every sentence has its own rhythm and pauses."}
 
 class MiVoz:
@@ -193,7 +193,7 @@ class MiVoz:
         return self.librosa.resample(out.astype(np.float32), orig_sr=self.hsr, target_sr=SR)
 
 def muestra_de_voz():
-    """La grabación más reciente de la carpeta mi-voz, convertida a wav 24 kHz y recortada a 25 s."""
+    """La grabación más reciente de la carpeta mi-voz, convertida a wav 24 kHz y recortada a 50 s."""
     MI_VOZ.mkdir(exist_ok=True)
     files = sorted((f for f in MI_VOZ.iterdir() if f.suffix.lower() in AUDIO_EXT and f.name != "_muestra.wav"),
                    key=lambda f: f.stat().st_mtime)
@@ -201,7 +201,7 @@ def muestra_de_voz():
         return None
     out = MI_VOZ / "_muestra.wav"
     if not out.exists() or out.stat().st_mtime < files[-1].stat().st_mtime:
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(files[-1]), "-t", "25", "-ac", "1", "-ar", str(SR),
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(files[-1]), "-t", "50", "-ac", "1", "-ar", str(SR),
                         "-af", "silenceremove=start_periods=1:start_threshold=-45dB,loudnorm", str(out)], check=True)
     return out
 

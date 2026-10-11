@@ -243,11 +243,11 @@ const PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/';
 const VOCES_NA = {
   es: [{id: 'es_MX-claude-high', ruta: 'es/es_MX/claude/high', nombre: 'Claude · México', mb: 63},
        {id: 'es_AR-daniela-high', ruta: 'es/es_AR/daniela/high', nombre: 'Daniela · Argentina', mb: 114},
-       {id: 'es_MX-ald-medium', ruta: 'es/es_MX/ald/medium', nombre: 'Ald · México', mb: 63},
        {id: 'es_ES-sharvard-medium', ruta: 'es/es_ES/sharvard/medium', nombre: 'Sharvard · España', mb: 77}],
   en: [{id: 'en_US-lessac-medium', ruta: 'en/en_US/lessac/medium', nombre: 'Lessac · EE. UU.', mb: 63},
        {id: 'en_US-amy-medium', ruta: 'en/en_US/amy/medium', nombre: 'Amy · EE. UU.', mb: 63}],
 };
+if(store.get('na:es') === 'es_MX-ald-medium'){ store.set('na:es', 'es_MX-claude-high'); }
 const vozNA = l => { const v = VOCES_NA[l === 'en' ? 'en' : 'es']; return v.find(x => x.id === store.get('na:' + (l === 'en' ? 'en' : 'es'))) || v[0]; };
 
 /* ---------- Biblioteca ---------- */
@@ -428,8 +428,11 @@ function setDoc(d, pos){
   if(zipUrl){ URL.revokeObjectURL(zipUrl); zipUrl = null; audioZip.removeAttribute('src'); audioZip.load(); }
   MV.pref = null; olvidarBloques(); pararNA(true);
   if(MV.prep){ MV.prep = false; MV.prepTok++; store.del('prepActiva'); }
+  if(NA.prep){ NA.prep = false; }
   $('#blackBtn').hidden = isAudioDoc() || modo !== 'telefono';
   updateVoiceBtn();
+  actualizarNA();
+  if(modo === 'mivoz' && store.get('vozSE')) setTimeout(() => precalentarMV(), 500);
   renderPage(flat.length ? flat[idx].p : 0);
   updateMeta(); mediaMeta();
 }
@@ -734,7 +737,10 @@ audioZip.addEventListener('play', ()=>{ if(isAudioDoc() && !playing){ playing = 
 const esMiVoz = () => modo === 'mivoz' && doc && !isAudioDoc();
 const SRV = 24000;
 const MV = {M: null, configurado: false, tgt: null, base: null, enDisco: new Set(), pref: null, prep: false, prepTok: 0,
-            pag: null, url: null, sig: null, listo: null, relevoT: null, guardado: 0, turno: 0};   // pag/url/sig/turno: el audio que suena (también la voz natural)
+            pag: null, url: null, sig: null, listo: null, relevoT: null, guardado: 0, turno: 0,
+            enCurso: new Map(), mem: new Map(), cfg: null, tick: null, silencios: 0, silencioSeg: 0};
+            // enCurso: frases generándose ahora (para no repetir trabajo); mem: audio listo sin pasar por el disco;
+            // cfg: procesos del motor ya ajustados; tick: el adelanto mientras se escucha; silencios: esperas ya sufridas
 
 // Frases guardadas en 12 bits (1,5 bytes por muestra, ~130 MB por hora de lectura).
 function empacar(a){
@@ -788,11 +794,13 @@ async function discoMV(){
   const pref = `${doc.key}|${firmaMV()}|`;
   if(MV.pref === pref) return;
   MV.pref = pref; MV.enDisco = new Set();
+  MV.mem.clear();                       // lo que estaba listo era de otro libro u otra voz
+  MV.enCurso.clear();
   const ks = await kv.keys('pistas', pref) || [];
   if(MV.pref === pref) ks.forEach(k => MV.enDisco.add(+k.slice(pref.length)));
 }
 const frasesDePagina = p => { const a = pageStarts[p], b = p + 1 < pageStarts.length ? pageStarts[p + 1] : flat.length; return Array.from({length: b - a}, (_, k) => a + k); };
-const paginaLista = p => { const f = frasesDePagina(p); return f.length > 0 && f.every(i => MV.enDisco.has(i)); };
+const paginaLista = p => { const f = frasesDePagina(p); return f.length > 0 && f.every(i => listaMV(i)); };
 
 // Carga el motor (la primera vez descarga unos 180 MB) y elige la voz natural más parecida a la tuya.
 async function motorMV(avance = ()=>{}){
@@ -832,7 +840,19 @@ async function elegirBase(){
   MV.pref = null;
 }
 function avanceMV(msg, n, t){
-  $('#mvDescarga').textContent = t > 1000 ? `${msg}: ${Math.round(n / 1e6)} de ${Math.round(t / 1e6)} MB (solo la primera vez; usa Wi-Fi).` : msg + '…';
+  const txt = t > 1000 ? `${msg}: ${Math.round(n / 1e6)} de ${Math.round(t / 1e6)} MB (solo la primera vez; usa Wi-Fi).` : msg + '…';
+  $('#mvDescarga').textContent = txt;
+  if(playing || !$('#status').hidden) showStatus(txt, null, t ? n / t : null);
+}
+async function precalentarMV(){
+  if(!store.get('vozSE')) return;
+  try{
+    if(!MV.M) MV.M = await import('./voz/motor.js');
+    if(await MV.M.modelosGuardados(true)){
+      await motorMV(()=>{});
+      asegurarCfgMV().catch(()=>{});   // deja listos la voz base y los procesos antes de tocar «Leer»
+    }
+  }catch(e){}
 }
 
 /* ---------- Preparar el libro ---------- */
@@ -852,8 +872,10 @@ async function prepararMV(){
     await motorMV(avanceMV);
     const conGPU = MV.M.usaGPU();
     const elegido = store.get('mvProcesos', null);
-    let plan = conGPU || elegido ? null : PRUEBAS.slice(), resultados = [];
-    let actual = conGPU ? [1, 1] : (elegido || PRUEBAS[0]);
+    // Mientras se escucha no se prueban configuraciones: cambiar la cantidad de procesos a mitad de la
+    // lectura la dejaría esperando. Se usa la que ya se midió (o la que está en uso).
+    let plan = (conGPU || elegido || playing) ? null : PRUEBAS.slice(), resultados = [];
+    let actual = conGPU ? [1, 1] : (elegido || (playing ? [1, 1] : PRUEBAS[0]));
     let cap = await MV.M.ajustar(...actual);
     $('#mvDescarga').textContent = '';
     await discoMV();
@@ -881,14 +903,14 @@ async function prepararMV(){
         $('#mvDescarga').textContent = '';
         fase = {t: null, letras: 0};
       }
+      // La pre-generación usa la misma vía de generación que la lectura (asegurarFraseMV): así nunca
+      // quedan frases saltadas (antes, si una estaba en curso, la pre-generación la daba por hecha y la
+      // lectura se quedaba esperando justo esa) y si estás escuchando, las dos esperan el mismo trabajo.
+      const s = flat[i];
       const job = (async ()=>{
-        const s = flat[i], b = MV.base[s.l] || MV.base.es;
-        const crudo = MV.M.recortar(await MV.M.hablar(s.t, s.l, b.id, 1));
-        if(tok !== MV.prepTok || doc !== d) return;
-        const a = await MV.M.convertir(crudo, b.se, MV.tgt);
-        if(tok !== MV.prepTok || doc !== d) return;
-        await kv.put('pistas', claveMV(i), empacar(a));
-        MV.enDisco.add(i); letras += s.t.length;
+        await asegurarFraseMV(i);
+        if(tok !== MV.prepTok || doc !== d || !listaMV(i)) return;
+        letras += s.t.length;
         if(fase.t == null) fase.t = performance.now(); else fase.letras += s.t.length;
         MV.falta = letras ? (performance.now() - t0) / 1000 / letras * (letrasTotal - letras) : null;
         actualizarMV();
@@ -936,11 +958,12 @@ function actualizarMV(){
   const listas = conTexto.filter(paginaLista).length;
   $('#mvBar').style.width = Math.round(listas / Math.max(1, conTexto.length) * 100) + '%';
   let t = `${listas} de ${conTexto.length} páginas listas con tu voz.`;
-  if(MV.prep) t += MV.falta != null ? ` Preparando… faltan ~${fmtTime(MV.falta)}. Deja LectorLibre abierta y el teléfono cargando.` : ' Preparando…';
-  else if(listas < conTexto.length) t += ' Toca «Preparar con mi voz» para seguir.';
+  if(MV.prep) t += MV.falta != null ? ` Pre-generando… faltan ~${fmtTime(MV.falta)}. Puedes cancelar cuando quieras.` : ' Pre-generando…';
+  else if(listas < conTexto.length) t += ' Toca «Leer» (▶) para escuchar al vuelo al instante, o pre-genera todo el libro.';
+  else t += ' Audio completo listo: guardado en tu teléfono.';
   $('#mvEstado').textContent = t;
-  $('#mvPrep').textContent = MV.prep ? 'Detener' : (listas ? 'Seguir preparando' : 'Preparar con mi voz');
-  $('#mvPrep').hidden = !MV.prep && listas === conTexto.length;
+  $('#mvPrep').textContent = MV.prep ? 'Detener' : (listas ? (listas === conTexto.length ? 'Re-generar libro completo' : 'Seguir pre-generando') : 'Pre-generar con mi voz');
+  $('#mvPrep').hidden = false;
 }
 $('#mvPrep').onclick = prepararMV;
 
@@ -957,7 +980,7 @@ const ADELANTE_SEG = 45 * 60;
 // Un solo proceso genera la voz: cada uno necesita cientos de MB y el iPhone cierra la página si se pasa
 // («Ocurrió un problema»). (La app es solo para celular.)
 const NA = {ws: [], max: 1, limite: Infinity, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
-            tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), enCurso: new Map(), pref: null};
+            tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), cub: null, enCurso: new Map(), pref: null, prep: false, falta: null};
 
 function procesoNA(k){
   if(NA.ws[k]) return NA.ws[k];
@@ -1062,24 +1085,101 @@ async function discoNA(){
   const pref = firmaNA();
   if(NA.pref === pref) return;
   NA.pref = pref; NA.hechas = new Map();
+  NA.cub = new Uint8Array(flat.length);
   const ks = await kv.keys('pistas', pref) || [];
   if(NA.pref !== pref) return;
   for(const k of ks){
     const [i, hasta, n] = k.slice(pref.length).split('|').map(Number);
-    if(!NA.hechas.has(i)) NA.hechas.set(i, {hasta, n, k});
+    if(!NA.hechas.has(i)){ NA.hechas.set(i, {hasta, n, k}); marcarNA(i, hasta); }
   }
+  actualizarNA();
   // lo de otros libros u otras voces ya no se usa: se borra
   const otros = new Set();
   for(const k of await kv.keys('pistas', 'na|') || []) if(!k.startsWith(pref)) otros.add(k.split('|').slice(0, 3).join('|') + '|');
   for(const p of otros) kv.delPrefix('pistas', p).catch(()=>{});
 }
-const adelanteSeg = () => { let n = 0; for(const [i, h] of NA.hechas) if(i >= idx) n += h.n; return n / NA.sr; };
+// Qué frases ya están listas, en una tabla: antes se recorría la lista entera por cada frase (con un libro
+// largo eso era lentísimo y la app parecía colgada al preparar o al mostrar el avance).
+function marcarNA(i, hasta){
+  if(!NA.cub || hasta >= NA.cub.length) return;
+  for(let k = i; k <= hasta; k++) NA.cub[k] = 1;
+}
+let adelanteCache = {t: 0, v: 0};
+const adelanteSeg = () => {
+  const ahora = Date.now();
+  if(ahora - adelanteCache.t < 400) return adelanteCache.v;
+  let n = 0; for(const [i, h] of NA.hechas) if(i >= idx) n += h.n;
+  adelanteCache = {t: ahora, v: n / NA.sr};
+  return adelanteCache.v;
+};
 function despertarNA(){ const d = NA.dormidos; NA.dormidos = []; d.forEach(r => r()); }
 function mostrarAdelanto(){
   const el = $('#naAdelanto');
   if(!el || $('#scrim').hidden || modo !== 'natural' || !doc || isAudioDoc() || NA.pref !== firmaNA()) return;
   const s = adelanteSeg();
   el.textContent = s > 30 ? `Listo por adelantado en este libro: ~${fmtTime(s / rate)}.` : '';
+}
+
+const fraseHechaNA = i => !!NA.cub && NA.cub[i] === 1;
+const paginaListaNA = p => {
+  const f = frasesDePagina(p);
+  return f.length > 0 && f.every(fraseHechaNA);
+};
+function actualizarNA(){
+  const box = $('#naPrepBox');
+  if(!box) return;
+  box.hidden = !doc || isAudioDoc();
+  if(!doc || isAudioDoc()) return;
+  const conTexto = doc.pages.map((_, p) => p).filter(p => frasesDePagina(p).length);
+  const listas = conTexto.filter(paginaListaNA).length;
+  $('#naBar').style.width = Math.round(listas / Math.max(1, conTexto.length) * 100) + '%';
+  let t = `${listas} de ${conTexto.length} páginas listas con voz natural.`;
+  if(NA.prep) t += NA.falta != null ? ` Preparando… faltan ~${fmtTime(NA.falta)}. Deja LectorLibre abierta y el teléfono cargando.` : ' Preparando…';
+  else if(listas < conTexto.length) t += ' Toca «Preparar audio completo» para no tener cortes.';
+  else t += ' Audio completo listo: sonará de corrido aunque bloquees la pantalla.';
+  $('#naEstado').textContent = t;
+  $('#naPrep').textContent = NA.prep ? 'Detener' : (listas ? (listas === conTexto.length ? 'Repreparar audio completo' : 'Seguir preparando') : 'Preparar audio completo');
+}
+async function prepararLibroNA(){
+  if(NA.prep){ NA.prep = false; NA.tok++; actualizarNA(); return; }
+  if(!doc || isAudioDoc()) return;
+  NA.prep = true;
+  const tok = ++NA.tok, d = doc;
+  holdScreen(true);
+  try{
+    await discoNA();
+    const orden = [];
+    for(let i = idx; i < flat.length; i++) if(!fraseHechaNA(i)) orden.push(i);
+    for(let i = 0; i < idx; i++) if(!fraseHechaNA(i)) orden.push(i);
+    const t0 = performance.now(); let letras = 0;
+    const pref = firmaNA(), letrasTotal = orden.reduce((x, i) => x + flat[i].t.length, 0);
+
+    for(let k = 0; k < orden.length; k++){
+      const i = orden[k];
+      if(tok !== NA.tok || doc !== d) break;
+      if(fraseHechaNA(i)) continue;
+      const hasta = finUnidad(i), s = flat[i];
+      let texto = textoNA(s); for(let j = i + 1; j <= hasta; j++) texto += ' ' + textoNA(flat[j]);
+      await cargarVozNA(s.l, 0);
+      if(tok !== NA.tok || doc !== d) break;
+      const a = await llamarNA('hablar', [vozNA(s.l).id, texto], [], 0);
+      if(tok !== NA.tok || doc !== d || firmaNA() !== pref) break;
+      const v = empacar(recortarNA(a)), clave = pref + String(i).padStart(7, '0') + '|' + hasta + '|' + v.n;
+      await kv.put('pistas', clave, v);
+      NA.hechas.set(i, {hasta, n: v.n, k: clave}); marcarNA(i, hasta);
+      let letrasUnidad = 0; for(let j = i; j <= hasta; j++) letrasUnidad += flat[j].t.length;
+      letras += letrasUnidad;
+      NA.falta = letras ? (performance.now() - t0) / 1000 / letras * (letrasTotal - letras) : null;
+      actualizarNA(); mostrarAdelanto();
+    }
+  }catch(e){
+    diag('error preparando libro natural: ' + (e && e.message || e));
+    $('#naEstado').textContent = (e && e.message) || String(e);
+  }finally{
+    if(tok === NA.tok){ NA.prep = false; NA.falta = null; }
+    if(!playing) holdScreen(false);
+    actualizarNA();
+  }
 }
 
 async function generarNA(desde){
@@ -1115,7 +1215,7 @@ async function generarNA(desde){
         if(!doc || firmaNA() !== pref) return;               // cambiaste de libro o de voz
         const v = empacar(recortarNA(a)), clave = pref + String(i).padStart(7, '0') + '|' + hasta + '|' + v.n;
         await kv.put('pistas', clave, v);
-        NA.hechas.set(i, {hasta, n: v.n, k: clave}); soltar();
+        NA.hechas.set(i, {hasta, n: v.n, k: clave}); marcarNA(i, hasta); soltar();
         const w = NA.esperas.get(i); if(w){ NA.esperas.delete(i); w.res(); }
         // Fuera de la app, el iPhone cierra a la que usa mucho procesador por un minuto: se genera una frase
         // y se descansa 1,5 veces lo que tomó (40 % del procesador; igual va más rápido que la lectura).
@@ -1138,8 +1238,21 @@ async function generarNA(desde){
   catch(e){ if(tok === NA.tok){ for(const w of NA.esperas.values()) w.rej(e); NA.esperas.clear(); } }
   finally{ if(tok === NA.tok) NA.corre = false; }
 }
-// Al abrir un libro (o cambiar de voz) con la voz natural ya bajada: se carga la voz y se genera solo la
-// primera frase, para que al tocar «Leer» suene enseguida. (No baja nada nuevo ni sigue generando.)
+// Al abrir un libro (o cambiar de voz) con la voz natural ya bajada: se carga la voz y se deja un adelanto
+// listo (no solo la primera frase), para que al tocar «Leer» suene al instante y no se corte al empezar.
+// (No baja nada nuevo y se detiene solo al llegar al adelanto.)
+const PRECALENTADO_SEG = 25;
+function unidadesNA(desde, seg = PRECALENTADO_SEG){
+  const n = [];
+  let t = 0;
+  for(let k = desde; k < flat.length && t < seg; ){
+    const h = finUnidad(k);
+    let letras = 0; for(let j = k; j <= h; j++) letras += flat[j].t.length;
+    n.push(k); t += letras / 15;                 // ~15 letras por segundo de lectura
+    k = h + 1;
+  }
+  return Math.max(1, n.length);
+}
 let precalentando = null;
 function precalentarNA(yLeer, espera){
   clearTimeout(precalentando);
@@ -1152,7 +1265,7 @@ function precalentarNA(yLeer, espera){
       await discoNA();
       if(yLeer){ play(); return; }
       await cargarVozNA(l, 0);
-      if(!playing && !NA.corre && !NA.hechas.has(idx)){ NA.limite = 1; generarNA(idx); }
+      if(!playing && !NA.corre && !NA.hechas.has(idx)){ NA.limite = unidadesNA(idx); generarNA(idx); }
     }catch(e){}
   }, espera ?? (yLeer ? 0 : 400));
 }
@@ -1161,7 +1274,7 @@ function pararNA(limpiar){
   despertarNA();
   for(const w of NA.esperas.values()) w.rej(new Error('detenido'));
   NA.esperas.clear();
-  if(limpiar){ NA.pref = null; NA.hechas = new Map(); }
+  if(limpiar){ NA.pref = null; NA.hechas = new Map(); NA.cub = null; adelanteCache.t = 0; }
 }
 // Espera a que la frase i esté generada (si el generador va a otra parte, lo lleva ahí).
 function esperarNA(i){
@@ -1186,22 +1299,104 @@ const fuenteNA = {
     return a && {a: aEntero(a), hasta: h.hasta};
   },
   usada(i){
-    const h = NA.hechas.get(i);
-    if(h){ NA.hechas.delete(i); kv.del('pistas', h.k).catch(()=>{}); }
     despertarNA();
   },
 };
 
-/* ================= Escuchar como audio: «Mi voz» preparada y la voz natural ================= */
+/* ================= Escuchar como audio: «Mi voz» en vivo y la voz natural ================= */
 // Varias frases seguidas forman un solo audio (un «bloque»), con las pausas de lectura y el tiempo de cada
 // frase. Mientras más largo el bloque, menos veces tiene que despertarse la app con el teléfono bloqueado o
 // en otra app (gasta menos batería y hay menos riesgo de corte al cambiar de audio). Con la voz natural el
 // primer bloque es corto (empieza a sonar enseguida) y los siguientes crecen a medida que el generador se adelanta.
+
+/* ---------- «Mi voz» en vivo: generar por delante para que no haya esperas entre frases ---------- */
+// Tres cosas hacían que la lectura con tu voz se cortara: cada frase se generaba dos veces (la pedían a la
+// vez la reproducción y el adelanto), el motor trabajaba con un solo proceso aunque el teléfono aguantara
+// más, y el audio tenía que ir al disco antes de sonar. Aquí se arreglan las tres: una sola generación por
+// frase, los procesos que ya se midieron en «Pre-generar con mi voz», y el audio pasa a la lectura por
+// memoria mientras se guarda en el teléfono.
+async function asegurarCfgMV(){
+  if(!MV.cfg){
+    MV.cfg = (async ()=>{
+      await motorMV(avanceMV);
+      const conf = MV.M.usaGPU() ? [1, 1] : (store.get('mvProcesos', null) || [1, 1]);
+      // Abrir los procesos de más se hace de fondo: si se esperara, la primera frase tardaría varios
+      // segundos más (cada proceso extra carga sus modelos). La frase 1 ya sale con los que hay.
+      // Si hay una pre-generación en curso, ella manda: es la que está midiendo cuántos procesos convienen.
+      if(!MV.prep) Promise.resolve().then(() => MV.M.ajustar(...conf)).then(
+        () => diag('«Mi voz» en vivo: ' + conf[0] + ' de voz y ' + conf[1] + ' de timbre a la vez'),
+        () => {});
+      return conf;
+    })();
+    MV.cfg.catch(()=>{ MV.cfg = null; });
+  }
+  return MV.cfg;
+}
+const listaMV = i => MV.enDisco.has(i) || MV.mem.has(i);
+// Una sola generación por frase, aunque la pidan a la vez la reproducción y el adelanto.
+function asegurarFraseMV(i){
+  if(listaMV(i)) return Promise.resolve();
+  const ya = MV.enCurso.get(i);
+  if(ya) return ya;
+  const d = doc, pref = firmaMV(), clave = claveMV(i);
+  const p = (async ()=>{
+    await asegurarCfgMV();
+    if(doc !== d || firmaMV() !== pref) return null;    // cambió el libro o la voz: ya no sirve
+    if(!MV.base) throw new Error('Primero graba tu voz.');
+    const s = flat[i], b = MV.base[s.l] || MV.base.es;
+    const crudo = MV.M.recortar(await MV.M.hablar(s.t, s.l, b.id, 1));
+    const a = await MV.M.convertir(crudo, b.se, MV.tgt);
+    if(doc !== d || firmaMV() !== pref) return null;
+    MV.mem.set(i, a);                                   // lista para sonar ya mismo
+    while(MV.mem.size > 10) MV.mem.delete(MV.mem.keys().next().value);
+    kv.put('pistas', clave, empacar(a)).then(() => MV.enDisco.add(i))
+      .catch(e => diag('no se pudo guardar tu voz: ' + (e && e.message || e)));
+    actualizarMV();
+    return a;
+  })();
+  MV.enCurso.set(i, p);
+  p.then(()=>{}, ()=>{}).then(()=>{ if(MV.enCurso.get(i) === p) MV.enCurso.delete(i); });
+  return p;
+}
+// Pide varias frases seguidas: así los procesos del motor trabajan en paralelo en vez de una por una.
+const MV_VENTANA = 6;
+function pedirMV(desde, ventana = MV_VENTANA){
+  for(let i = Math.max(0, desde), fin = Math.min(flat.length, desde + ventana); i < fin; i++)
+    asegurarFraseMV(i).catch(()=>{});
+}
+// Mientras se escucha, mantiene llena la ventana de frases por delante (cada una se pide una sola vez).
+function adelantoMV(){
+  clearTimeout(MV.tick);
+  const paso = ()=>{
+    if(!playing || !esMiVoz() || !store.get('vozSE')){ MV.tick = null; return; }
+    const desde = (ST.sb && !ST.fin) ? ST.sig : (MV.pag ? MV.pag.ult + 1 : idx);
+    if(desde < flat.length && !(ST.sb && cargadoST() > CARGADO_SEG - 15)) pedirMV(desde);
+    MV.tick = setTimeout(paso, 300);
+  };
+  MV.tick = setTimeout(paso, 0);
+}
+
 const fuenteMV = {
   sr: SRV, max: 600,
-  lista: i => MV.enDisco.has(i),
-  async primera(i){ if(!MV.enDisco.has(i)) throw new Error('sin preparar'); },
-  audio: async i => { const a = desempacar(await kv.get('pistas', claveMV(i))); return a && {a: aEntero(a), hasta: i}; },
+  lista: listaMV,
+  async primera(i){
+    if(listaMV(i)) return;
+    if(!store.get('vozSE')) throw new Error('Primero graba tu voz.');
+    await asegurarFraseMV(i);
+  },
+  async audio(i){
+    if(!listaMV(i) && store.get('vozSE')) await asegurarFraseMV(i);
+    const mem = MV.mem.get(i);
+    if(mem){ MV.mem.delete(i); return {a: aEntero(mem), hasta: i}; }   // sin pasar por el disco
+    let a = desempacar(await kv.get('pistas', claveMV(i)));
+    if(!a && store.get('vozSE')){                                       // el guardado no llegó: se genera otra vez
+      MV.enDisco.delete(i);
+      await asegurarFraseMV(i);
+      a = MV.mem.get(i); if(a) MV.mem.delete(i);
+      if(!a) a = desempacar(await kv.get('pistas', claveMV(i)));
+    }
+    return a && {a: aEntero(a), hasta: i};
+  },
   usada(){},
 };
 const fuenteAU = () => esMiVoz() ? fuenteMV : fuenteNA;
@@ -1289,10 +1484,14 @@ async function sonarBloque(b, desde){
   prepararSiguiente();
 }
 function seguirGenerando(){
-  NA.limite = Infinity;
-  if(!esNatural() || NA.corre || !MV.pag) return;
-  const q = (MV.listo ? MV.listo.b.ult : MV.pag.ult) + 1;
-  if(q < flat.length) generarNA(q);
+  if(esNatural()){
+    NA.limite = Infinity;
+    if(NA.corre || !MV.pag) return;
+    const q = (MV.listo ? MV.listo.b.ult : MV.pag.ult) + 1;
+    if(q < flat.length) generarNA(q);
+  } else if(esMiVoz()){
+    adelantoMV();
+  }
 }
 // El bloque siguiente se arma apenas empieza este (con la pantalla bloqueada, el iPhone puede tardar en
 // avisar que el audio va terminando) y queda cargado en el otro reproductor.
@@ -1302,7 +1501,7 @@ function prepararSiguiente(){
   const q = b.ult + 1;
   if(q >= flat.length) return;
   const p = MV.sig = (async ()=>{
-    if(esMiVoz()){ await discoMV(); if(!fuenteMV.lista(q)) return null; }
+    if(esMiVoz()){ await discoMV(); if(!fuenteMV.lista(q) && store.get('vozSE')) await fuenteMV.primera(q).catch(()=>null); }
     const nb = await armarBloque(q);
     if(!nb) return null;
     if(MV.pag !== b){ soltarBloque(nb, null); return null; }
@@ -1325,10 +1524,17 @@ function revisarRelevo(){
   if(!b || !playing || !usaAudio()) return;
   const quedan = b.fin - audioVoz.currentTime;
   if(!MV.listo) prepararSiguiente();
-  if(MV.listo){ if(quedan <= 0.15) relevar(); return; }
-  // la voz natural todavía no tiene lo que sigue: esperar dando vueltas en el silencio final
-  if(quedan < 0 && esNatural() && b.ult + 1 < flat.length){
-    if(!MV.esperando){ MV.esperando = Date.now(); diag('esperando la voz (en silencio)'); if(document.visibilityState === 'visible') showStatus('Generando la voz… (sigue sola en cuanto esté lista)'); }
+  if(MV.listo){
+    if(quedan <= 0.15){
+      if(MV.esperando){ MV.silencioSeg += (Date.now() - MV.esperando) / 1000; MV.esperando = 0; hideStatus(); }
+      relevar();
+    }
+    return;
+  }
+  // la voz todavía no tiene lo que sigue: esperar dando vueltas en el silencio final (así el audio nunca
+  // «termina», que es lo que el iPhone no deja continuar con la pantalla bloqueada), y anotar la espera
+  if(quedan < 0 && b.ult + 1 < flat.length){
+    if(!MV.esperando){ MV.esperando = Date.now(); MV.silencios++; diag('esperando la voz (en silencio)'); if(document.visibilityState === 'visible') showStatus('Generando la voz… (sigue sola en cuanto esté lista)'); }
     if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; idx = b.ult + 1; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
     if(audioVoz.currentTime > b.fin + COLA - 6) audioVoz.currentTime = b.fin + 0.5;
   }
@@ -1373,7 +1579,7 @@ function olvidarBloques(){
 const MSE = window.ManagedMediaSource || window.MediaSource;
 const CONTINUO = !!MSE && MSE.isTypeSupported('audio/mpeg') && store.get('continuo', true);
 const RETRASO_MP3 = 1105;          // muestras que el codificador MP3 agrega al comienzo
-const CARGADO_SEG = 90;            // cuánto audio se deja cargado por delante en el reproductor
+const CARGADO_SEG = 1800;          // cuánto audio se deja cargado por delante en el reproductor (hasta 30 min)
 const ST = {tok: 0, ms: null, sb: null, url: null, sr: 0, muestras: 0, linea: [], sig: 0, fin: false, motivoFin: '', alimentando: false,
             w: null, n: 0, pend: new Map(), limpiado: 0};
 
@@ -1480,17 +1686,35 @@ async function alimentarST(){
       if(ST.sig >= flat.length){ await terminarST(tok); break; }
       const F = fuenteAU();
       if(!F.lista(ST.sig)){
-        if(esMiVoz()){ await terminarST(tok, 'sin preparar'); break; }
-        // la voz natural todavía no tiene lo que sigue: pedirlo y, si lo cargado se acaba, agregar silencio
-        let pedido = null;
+        if(esMiVoz() && !store.get('vozSE')){ await terminarST(tok, 'sin preparar'); break; }
+        if(esMiVoz()) pedirMV(ST.sig);   // pide varias frases: el motor trabaja en paralelo y la espera es la mitad
+        // La voz todavía no tiene lo que sigue: se espera y, solo si el audio está por vaciarse, se agrega
+        // micro-silencio. El pedido se reintenta cada medio segundo (pedir dos veces la misma frase no
+        // cuesta: se genera una sola vez). Antes bastaba con que un pedido terminara sin dejar el audio
+        // para que la espera se quedara girando para siempre, agregando silencio sin fin.
+        let pedido = null, pedidoT = 0;
         while(tok === ST.tok && playing && !F.lista(ST.sig)){
-          if(!pedido) pedido = F.primera(ST.sig).catch(() => { pedido = null; });
-          if(cargadoST() < 3){
-            if(!MV.esperando){ MV.esperando = Date.now(); diag('esperando la voz (en silencio)'); if(document.visibilityState === 'visible') showStatus('Generando la voz… (sigue sola en cuanto esté lista)'); }
-            if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
-            await silencioST(tok, 2);
+          if(!pedido && Date.now() - pedidoT > 500){
+            pedidoT = Date.now();
+            if(esMiVoz()) pedirMV(ST.sig);
+            pedido = F.primera(ST.sig).then(()=>{}, ()=>{}).then(() => { pedido = null; });
           }
-          await Promise.race([pedido, dormir(700)]);
+          if(cargadoST() < 0.35 && audioVoz.currentTime > 0.1){
+            if(!MV.esperando){
+              MV.esperando = Date.now(); MV.silencios++;
+              diag(`esperando la voz: frase ${ST.sig} de ${flat.length} · listas ${MV.enDisco.size} · en curso ${MV.enCurso.size} · memoria ${MV.mem.size}`);
+              // si el teléfono no alcanza a generar al ritmo de la lectura, se ofrece la vía segura: preparar todo
+              if(document.visibilityState === 'visible'){
+                const ofrecer = esMiVoz() && !MV.prep;
+                const aviso = esMiVoz() ? 'Generando tu voz… (sigue sola en cuanto esté lista)' : 'Generando la voz… (sigue sola en cuanto esté lista)';
+                showStatus(aviso, null, null, ofrecer ? 'Pre-generar el libro' : null, ofrecer ? ()=>{ hideStatus(); prepararMV(); } : null);
+              }
+            }
+            if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
+            MV.silencioSeg += 0.3;
+            await silencioST(tok, 0.3);
+          }
+          await Promise.race([pedido || dormir(50), dormir(50)]);   // nunca gira en vacío
         }
         if(tok !== ST.tok || !playing) break;
       }
@@ -1517,12 +1741,19 @@ async function playST(){
   }
   if(esMiVoz()){
     await discoMV();
-    if(!fuenteMV.lista(i)){ avisoSinPreparar(); openSheet(); return; }
+    if(!store.get('vozSE')){ avisoSinPreparar(); openSheet(); return; }
+    pedirMV(i);                      // la generación parte antes de arrancar: la primera frase no espera sola
   }
   playing = true; setPlayIcon();
   const yo = ++MV.turno;
   try{
-    if(esNatural()){ NA.limite = Infinity; await discoNA(); if(!NA.hechas.has(i)) showStatus('Preparando la voz…'); }
+    if(esNatural()){
+      NA.limite = Infinity;
+      await discoNA();
+      if(!NA.hechas.has(i)) showStatus('Preparando la voz…');
+    } else if(esMiVoz() && !fuenteMV.lista(i)){
+      showStatus('Iniciando tu voz…');
+    }
     await abrirST(i);
     if(yo !== MV.turno || !playing) return;
     hideStatus();
@@ -1547,22 +1778,30 @@ async function saltarST(i){
   showSentence(true, true);
   await playST();
 }
-// la voz natural se sigue generando por adelantado desde lo que viene (hasta 45 min, guardado en el teléfono)
+// la voz se sigue generando/preparando por adelantado desde lo que viene (pipelining continuo)
 function generarAdelanteST(){
-  NA.limite = Infinity;
-  if(esNatural() && !NA.corre && ST.sig < flat.length) generarNA(ST.sig);
+  if(esNatural()){
+    NA.limite = Infinity;
+    if(!NA.corre && ST.sig < flat.length) generarNA(ST.sig);
+  } else if(esMiVoz()){
+    adelantoMV();
+  }
 }
 function terminadoST(){
   if(!playing) return;
   if(ST.motivoFin === 'sin preparar'){
     idx = Math.min(ST.sig, flat.length - 1); stop(); showSentence(true, true); save(true);
-    showStatus('Hasta aquí llega lo preparado con tu voz. Abre «Voz» y toca «Seguir preparando».');
+    showStatus('Primero graba tu voz en el panel «Mi voz» para seguir.');
   } else if(ST.sig >= flat.length) finished();
   else { stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); }
 }
 
 function avisoSinPreparar(){
-  showStatus('Esta parte todavía no está preparada con tu voz. Abre «Voz» y toca «Preparar con mi voz», o elige otra voz.');
+  if(!store.get('vozSE')){
+    showStatus('Primero graba tu voz en el panel «Mi voz» para poder leer con ella.');
+  } else {
+    showStatus('Iniciando tu voz…');
+  }
 }
 async function playAU(){
   desbloquearAudio();
@@ -1581,12 +1820,19 @@ async function playAU(){
   }
   if(esMiVoz()){
     await discoMV();
-    if(!fuenteMV.lista(i)){ avisoSinPreparar(); openSheet(); return; }
+    if(!store.get('vozSE')){ avisoSinPreparar(); openSheet(); return; }
+    pedirMV(i);                      // la generación parte antes de arrancar: la primera frase no espera sola
   }
   playing = true; setPlayIcon();
   const yo = ++MV.turno;
   try{
-    if(esNatural()){ NA.limite = Infinity; await discoNA(); if(!NA.hechas.has(i)) showStatus('Preparando la voz…'); }
+    if(esNatural()){
+      NA.limite = Infinity;
+      await discoNA();
+      if(!NA.hechas.has(i)) showStatus('Preparando la voz…');
+    } else if(esMiVoz() && !fuenteMV.lista(i)){
+      showStatus('Iniciando tu voz…');
+    }
     const b = await armarBloque(i);
     if(yo !== MV.turno || !playing){ if(b) soltarBloque(b, null); return; }
     hideStatus();
@@ -1610,8 +1856,13 @@ function sincronizarAU(){
   if(cur && cur.i !== idx){ idx = cur.i; return true; }
   return false;
 }
-// Solo cuenta lo que hace el reproductor que está sonando (el otro espera su turno).
-const actual = (fn) => e => { if(e.target === audioVoz && usaAudio()) fn(e); };
+// Solo cuenta lo que hace el reproductor que está sonando (el otro espera su turno), y nunca el silencio
+// que se usa para desbloquear el audio: ese termina al instante y antes detenía la lectura recién empezada.
+const actual = (fn) => e => {
+  if(e.target !== audioVoz || !usaAudio()) return;
+  if(!e.target.src || String(e.target.src).startsWith('data:')) return;
+  fn(e);
+};
 for(const el of reproductores){
   // Con la app fuera de pantalla solo se revisa el relevo; la posición se calcula al volver o al pausar.
   el.addEventListener('timeupdate', actual(()=>{
@@ -1715,7 +1966,11 @@ $('#recBtn').onclick = async ()=>{
   rec.ondataavailable = e => { if(e.data.size) partes.push(e.data); };
   const ctx = new (window.AudioContext || window.webkitAudioContext)(); ctx.resume().catch(()=>{});
   const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an);
-  const buf = new Uint8Array(an.fftSize), DUR = 25, t0 = Date.now(); let raf;
+  const buf = new Uint8Array(an.fftSize), t0 = Date.now(); let raf;
+  // La duración sale del texto de prueba: así, si el texto se alarga, la grabación también
+  // (y la voz queda mejor: el timbre se saca de una muestra más larga).
+  const guion = ($('#recTexto') && $('#recTexto').textContent || '').trim();
+  const DUR = Math.max(30, Math.min(90, Math.round((guion.length || 600) / 12)));
   const tic = ()=>{
     an.getByteTimeDomainData(buf); let pk = 0; for(const v of buf) pk = Math.max(pk, Math.abs(v - 128));
     $('#recLevel').style.width = Math.min(100, pk / 128 * 140) + '%';
@@ -1732,7 +1987,7 @@ $('#recBtn').onclick = async ()=>{
     try{
       const blob = new Blob(partes, {type: rec.mimeType || 'audio/mp4'});
       const pcm = await ctx.decodeAudioData(await blob.arrayBuffer());
-      if(pcm.duration < 8) throw new Error('La grabación quedó muy corta. Lee el texto completo (unos 20 segundos).');
+      if(pcm.duration < 15) throw new Error('La grabación quedó muy corta. Lee el texto completo (unos 50 segundos).');
       showStatus('Analizando tu voz…');
       if(!MV.M) MV.M = await import('./voz/motor.js');
       let a = MV.M.recortar(pcm.getChannelData(0));
@@ -1770,7 +2025,11 @@ $('#mvTest').onclick = async ()=>{
 /* ---------- Elegir entre la voz del teléfono y la tuya ---------- */
 function setModo(m){
   if(m !== modo && playing) stop();
-  if(m !== modo){ olvidarBloques(); if(m === 'natural') setTimeout(() => precalentarNA(), 0); }
+  if(m !== modo){
+    olvidarBloques();
+    if(m === 'natural') setTimeout(() => precalentarNA(), 0);
+    if(m === 'mivoz') setTimeout(() => precalentarMV(), 0);
+  }
   if(m !== 'natural') soltarNA();
   modo = m; store.set('modo', m);
   document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.modo === m ? 'true' : 'false'));
@@ -1778,11 +2037,15 @@ function setModo(m){
   $('#blackBtn').hidden = !doc || isAudioDoc() || m !== 'telefono';
   updateVoiceBtn();
   if(m === 'mivoz' && doc && !isAudioDoc()) discoMV().then(actualizarMV); else actualizarMV();
+  if(m === 'natural' && doc && !isAudioDoc()) discoNA().then(actualizarNA); else actualizarNA();
 }
 document.querySelectorAll('.seg button').forEach(b => b.onclick = () => setModo(b.dataset.modo));
 
 /* ---------- Elegir la voz natural ---------- */
 function llenarNA(){
+  const prepBtn = $('#naPrep');
+  if(prepBtn) prepBtn.onclick = prepararLibroNA;
+  actualizarNA();
   for(const l of ['es', 'en']){
     const sel = $(l === 'es' ? '#naEs' : '#naEn'), elegida = vozNA(l).id; sel.innerHTML = '';
     for(const v of VOCES_NA[l]){
@@ -1841,7 +2104,11 @@ function stop(){
   if(!audioZip.paused) audioZip.pause();
   if(!audioVoz.paused) audioVoz.pause();
   MV.turno++; pararNA(false); clearTimeout(MV.relevoT); clearTimeout(MV.reintento); MV.interrumpido = 0;
-  if(!MV.prep) holdScreen(false);
+  clearTimeout(MV.tick); MV.tick = null;
+  // queda anotado cuánto se hizo esperar tu voz (sirve para el diagnóstico si la lectura se corta)
+  const esperas = MV.silencios - (MV.dicho || 0);
+  if(esperas > 0){ MV.dicho = MV.silencios; diag(`tu voz se hizo esperar ${esperas} ${esperas === 1 ? 'vez' : 'veces'} (${MV.silencioSeg.toFixed(1)} s de silencio en total)`); }
+  if(!MV.prep && !NA.prep) holdScreen(false);
   if(was) save(true);
   if(doc) setPlayIcon();
 }
@@ -1938,7 +2205,7 @@ function openSheet(){
   $('#engineBox').hidden = a; $('#audioNote').hidden = !a;
   setModo(modo); llenarNA();
   $('#diagTexto').textContent = store.get('diag', []).slice().reverse().join('\n') || 'Todavía no hay nada anotado.';
-  if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(mostrarAdelanto);
+  if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(()=>{ mostrarAdelanto(); actualizarNA(); });
   $('#scrim').hidden = false; fillVoices();
 }
 function closeSheet(){ $('#scrim').hidden = true; }
@@ -1972,11 +2239,19 @@ $('#test').onclick = ()=>{
 };
 
 /* ================= Agregar libros ================= */
-function showStatus(msg, kind, frac){
+function showStatus(msg, kind, frac, actionText, onAction){
   $('#statusText').textContent = msg; $('#status').className = 'status' + (kind ? ' '+kind : ''); $('#status').hidden = false;
   const pr = $('#statusProg'); pr.hidden = frac == null; if(frac != null) pr.firstChild.style.width = Math.round(frac*100) + '%';
+  const act = $('#statusAction');
+  if(act){
+    act.hidden = !actionText;
+    if(actionText){ act.textContent = actionText; act.onclick = onAction || null; }
+  }
 }
-function hideStatus(){ $('#status').hidden = true; }
+function hideStatus(){
+  $('#status').hidden = true;
+  const act = $('#statusAction'); if(act) act.hidden = true;
+}
 
 /* ---------- OCR: reconocer el texto de páginas escaneadas y de fotos ---------- */
 // Tesseract (vendor/tesseract) corre en el propio teléfono, sin internet. Español e inglés, modelos «fast».
@@ -2356,6 +2631,9 @@ setRate(rate);
   }
   showLibrary();
 })().then(()=> retomarPreparacion());
-window.lectora = {estado: () => ({idx, playing})};
+window.lectora = {estado: () => ({idx, playing, modo, sig: ST.sig,
+  cargado: +cargadoST().toFixed(1), listasMV: MV.enDisco.size, generandoMV: MV.enCurso.size,
+  sinGuardarMV: MV.mem.size, esperasMV: MV.silencios, esperaSegMV: +MV.silencioSeg.toFixed(1),
+  listasNA: NA.hechas.size, generandoNA: NA.enCurso.size})};
 
 
