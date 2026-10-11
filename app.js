@@ -1776,7 +1776,9 @@ async function playST(){
     if(e && e.message === 'detenido') return;
     if(e && e.message === 'sin preparar'){ avisoSinPreparar(); return; }
     diag('no se pudo reproducir: ' + (e && (e.message || e.name)));
-    showStatus(e && e.name === 'NotAllowedError' ? 'El teléfono no dejó reproducir. Toca el botón otra vez.' : (e && e.message) || 'No se pudo reproducir.', e && e.name === 'NotAllowedError' ? null : 'err');
+    const txt = e && e.name === 'NotAllowedError' ? 'El teléfono no dejó reproducir. Toca el botón otra vez.' : (e && e.message) || 'No se pudo reproducir.';
+    if(esMiVoz()) avisoMiVoz('No pude leer con tu voz: ' + txt, true);
+    showStatus(txt, e && e.name === 'NotAllowedError' ? null : 'err');
   }
 }
 async function saltarST(i){
@@ -1808,6 +1810,7 @@ function terminadoST(){
 
 function avisoSinPreparar(){
   if(!store.get('vozSE')){
+    avisoMiVoz('Todavía no hay una voz grabada: toca «Grabar mi voz» (o usa un audio grabado con Notas de Voz).', true);
     showStatus('Primero graba tu voz en el panel «Mi voz» para poder leer con ella.');
   } else {
     showStatus('Iniciando tu voz…');
@@ -1854,7 +1857,9 @@ async function playAU(){
     if(e && e.message === 'detenido') return;
     if(e && e.message === 'sin preparar'){ avisoSinPreparar(); return; }
     diag('no se pudo reproducir: ' + (e && (e.message || e.name)));
-    showStatus(e && e.name === 'NotAllowedError' ? 'El teléfono no dejó reproducir. Toca el botón otra vez.' : (e && e.message) || 'No se pudo reproducir.', e && e.name === 'NotAllowedError' ? null : 'err');
+    const txt = e && e.name === 'NotAllowedError' ? 'El teléfono no dejó reproducir. Toca el botón otra vez.' : (e && e.message) || 'No se pudo reproducir.';
+    if(esMiVoz()) avisoMiVoz('No pude leer con tu voz: ' + txt, true);
+    showStatus(txt, e && e.name === 'NotAllowedError' ? null : 'err');
   }
 }
 // Frase que está sonando, según el tiempo del audio.
@@ -1965,54 +1970,116 @@ async function saltarAU(i){
 }
 
 /* ---------- Grabar tu voz ---------- */
+// Dos caminos: grabar con el micrófono del navegador, o usar un audio ya grabado (por ejemplo con la app
+// Notas de Voz del iPhone). El segundo existe porque muchos navegadores del teléfono no dan el micrófono
+// (Chrome en iPhone lo autoriza aparte, en Ajustes › Chrome) y porque ahí getUserMedia falla en silencio.
 let grabando = null;
+const esIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const esChromeIOS = /CriOS/.test(navigator.userAgent);
+// Los avisos de «Mi voz» (micrófono y errores al leer) van dentro del panel: el aviso general queda
+// detrás de esta ventana, así que un fallo ahí no se veía y parecía que la app no hacía nada.
+function avisoMiVoz(msg, malo){
+  const el = $('#recAviso'); if(!el) return;
+  el.hidden = !msg; el.textContent = msg || '';
+  el.style.color = malo ? '#c0392b' : '';
+}
+function ayudaMicrofono(){
+  if(esChromeIOS) return 'Para darle micrófono a Chrome: Ajustes del iPhone › Chrome › activa «Micrófono». Si antes dijiste «No permitir», iOS no vuelve a preguntar, así que hay que activarlo a mano.';
+  if(esIOS) return 'Para darle micrófono a Safari: Ajustes del iPhone › Safari › Micrófono (y Ajustes › Privacidad › Micrófono). Si antes dijiste «No permitir», iOS no vuelve a preguntar.';
+  return 'Revisa el permiso de micrófono de esta página en el navegador.';
+}
+// Convierte un audio (de la grabación o de un archivo) en tu huella de voz y lo guarda en el teléfono.
+// ctx: si viene de la grabación, se reusa el AudioContext que ya se creó con el toque; si no, se crea uno.
+async function guardarVoz(blob, ctx){
+  const propio = !ctx;
+  const c = ctx || new (window.AudioContext || window.webkitAudioContext)();
+  try{
+    let pcm;
+    try{ pcm = await c.decodeAudioData(await blob.arrayBuffer()); }
+    catch(e){ throw new Error('No pude leer ese audio. Prueba con un archivo grabado con Notas de Voz (.m4a) o un .wav o .mp3.'); }
+    if(pcm.duration < 15) throw new Error(`El audio dura ${Math.round(pcm.duration)} segundos y es muy corto: lee el texto completo (unos 50 segundos).`);
+    if(!MV.M) MV.M = await import('./voz/motor.js');
+    let a = MV.M.recortar(pcm.getChannelData(0));
+    let pico = 0; for(const v of a) pico = Math.max(pico, Math.abs(v));
+    if(pico > 0) a = a.map(v => v * 0.95 / pico);             // nivel parejo, sin importar la distancia al micrófono
+    avisoMiVoz('Analizando tu voz… (la primera vez baja el modelo, puede tardar un poco)');
+    showStatus('Analizando tu voz…');
+    const se = await MV.M.huellaDe(a, pcm.sampleRate);
+    await kv.put('voz', 'grabacion', blob);
+    store.set('vozSE', Array.from(se)); store.set('vozHash', Date.now().toString(36)); store.del('vozBase');
+    await elegirBase();
+    MV.pref = null; if(doc) await discoMV();
+    hideStatus(); avisoMiVoz('');
+    return true;
+  }catch(e){
+    hideStatus();
+    avisoMiVoz((e && e.message) || 'No pude procesar ese audio. Intenta otra vez.', true);
+    throw e;
+  }finally{ if(propio){ try{ c.close(); }catch(e){} } }
+}
 $('#recBtn').onclick = async ()=>{
   if(grabando){ grabando.terminar(); return; }
+  avisoMiVoz('');
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    avisoMiVoz('Este navegador no da acceso al micrófono. ' + ayudaMicrofono() + ' Mientras tanto, graba con Notas de Voz y toca «Usar un audio grabado».', true);
+    return;
+  }
+  if(!window.MediaRecorder){
+    avisoMiVoz('Este navegador no puede grabar desde la app. Graba con la app Notas de Voz del iPhone, compártelo a Archivos y toca «Usar un audio grabado».', true);
+    return;
+  }
   let stream;
   try{ stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1}}); }
-  catch(e){ showStatus('No pude usar el micrófono. Revisa el permiso en Ajustes › Safari › Micrófono (o en los permisos del navegador).', 'err'); return; }
-  $('#recLive').hidden = false; $('#recEmpty').hidden = false; $('#recDone').hidden = true;
-  const partes = [], rec = new MediaRecorder(stream);
-  rec.ondataavailable = e => { if(e.data.size) partes.push(e.data); };
-  const ctx = new (window.AudioContext || window.webkitAudioContext)(); ctx.resume().catch(()=>{});
-  const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an);
-  const buf = new Uint8Array(an.fftSize), t0 = Date.now(); let raf;
-  // La duración sale del texto de prueba: así, si el texto se alarga, la grabación también
-  // (y la voz queda mejor: el timbre se saca de una muestra más larga).
-  const guion = ($('#recTexto') && $('#recTexto').textContent || '').trim();
-  const DUR = Math.max(30, Math.min(90, Math.round((guion.length || 600) / 12)));
-  const tic = ()=>{
-    an.getByteTimeDomainData(buf); let pk = 0; for(const v of buf) pk = Math.max(pk, Math.abs(v - 128));
-    $('#recLevel').style.width = Math.min(100, pk / 128 * 140) + '%';
-    const q = Math.max(0, DUR - Math.floor((Date.now() - t0) / 1000));
-    $('#recTime').textContent = `Grabando… ${q} s (toca «Terminar» si ya leíste todo)`;
-    if(q <= 0) terminar(); else raf = requestAnimationFrame(tic);
-  };
-  const terminar = ()=>{ if(rec.state !== 'inactive') rec.stop(); cancelAnimationFrame(raf); };
-  grabando = {terminar};
-  $('#recBtn').textContent = '■ Terminar';
-  rec.onstop = async ()=>{
-    stream.getTracks().forEach(t => t.stop()); grabando = null;
-    $('#recLive').hidden = true; $('#recBtn').textContent = 'Procesando…'; $('#recBtn').disabled = true;
-    try{
-      const blob = new Blob(partes, {type: rec.mimeType || 'audio/mp4'});
-      const pcm = await ctx.decodeAudioData(await blob.arrayBuffer());
-      if(pcm.duration < 15) throw new Error('La grabación quedó muy corta. Lee el texto completo (unos 50 segundos).');
-      showStatus('Analizando tu voz…');
-      if(!MV.M) MV.M = await import('./voz/motor.js');
-      let a = MV.M.recortar(pcm.getChannelData(0));
-      let pico = 0; for(const v of a) pico = Math.max(pico, Math.abs(v));
-      if(pico > 0) a = a.map(v => v * 0.95 / pico);             // nivel parejo, sin importar la distancia al micrófono
-      const se = await MV.M.huellaDe(a, pcm.sampleRate);
-      await kv.put('voz', 'grabacion', blob);
-      store.set('vozSE', Array.from(se)); store.set('vozHash', Date.now().toString(36)); store.del('vozBase');
-      await elegirBase();
-      MV.pref = null; if(doc) await discoMV();
-      hideStatus();
-    }catch(e){ showStatus(e.message || 'No pude procesar la grabación. Intenta otra vez.', 'err'); }
-    finally{ ctx.close(); $('#recBtn').disabled = false; actualizarMV(); }
-  };
-  rec.start(); tic();
+  catch(e){
+    const que = e && e.name === 'NotAllowedError' ? 'El navegador no dio permiso para el micrófono.' : 'No pude usar el micrófono (' + ((e && e.name) || 'error') + ').';
+    avisoMiVoz(que + ' ' + ayudaMicrofono() + ' También puedes grabar con Notas de Voz y tocar «Usar un audio grabado».', true);
+    return;
+  }
+  try{
+    $('#recLive').hidden = false; $('#recEmpty').hidden = false; $('#recDone').hidden = true;
+    const partes = [], rec = new MediaRecorder(stream);
+    rec.ondataavailable = e => { if(e.data.size) partes.push(e.data); };
+    const ctx = new (window.AudioContext || window.webkitAudioContext)(); ctx.resume().catch(()=>{});
+    const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an);
+    const buf = new Uint8Array(an.fftSize), t0 = Date.now(); let raf;
+    // La duración sale del texto de prueba: así, si el texto se alarga, la grabación también
+    // (y la voz queda mejor: el timbre se saca de una muestra más larga).
+    const guion = ($('#recTexto') && $('#recTexto').textContent || '').trim();
+    const DUR = Math.max(30, Math.min(90, Math.round((guion.length || 600) / 12)));
+    const tic = ()=>{
+      an.getByteTimeDomainData(buf); let pk = 0; for(const v of buf) pk = Math.max(pk, Math.abs(v - 128));
+      $('#recLevel').style.width = Math.min(100, pk / 128 * 140) + '%';
+      const q = Math.max(0, DUR - Math.floor((Date.now() - t0) / 1000));
+      $('#recTime').textContent = `Grabando… ${q} s (toca «Terminar» si ya leíste todo)`;
+      if(q <= 0) terminar(); else raf = requestAnimationFrame(tic);
+    };
+    const terminar = ()=>{ if(rec.state !== 'inactive') rec.stop(); cancelAnimationFrame(raf); };
+    grabando = {terminar};
+    $('#recBtn').textContent = '■ Terminar';
+    rec.onstop = async ()=>{
+      stream.getTracks().forEach(t => t.stop()); grabando = null;
+      $('#recLive').hidden = true; $('#recBtn').textContent = 'Procesando…'; $('#recBtn').disabled = true;
+      try{
+        await guardarVoz(new Blob(partes, {type: rec.mimeType || 'audio/mp4'}), ctx);
+      }catch(e){ /* el aviso ya quedó en el panel */ }
+      finally{ try{ ctx.close(); }catch(e){} $('#recBtn').disabled = false;
+        $('#recBtn').textContent = store.get('vozSE') ? '● Grabar de nuevo' : '● Grabar mi voz'; actualizarMV(); }
+    };
+    rec.start(); tic();
+  }catch(e){
+    stream.getTracks().forEach(t => t.stop());
+    avisoMiVoz('No pude empezar a grabar (' + ((e && e.message) || e) + '). Usa «Usar un audio grabado».', true);
+  }
+};
+// Grabar con otra app (Notas de Voz) y elegir el archivo: funciona aunque el navegador no dé el micrófono.
+$('#recPick').onclick = ()=> $('#recFile').click();
+$('#recFile').onchange = async e => {
+  const f = e.target.files && e.target.files[0]; e.target.value = '';
+  if(!f) return;
+  avisoMiVoz('Leyendo «' + f.name + '»…');
+  try{ await guardarVoz(f); }
+  catch(err){ /* el aviso ya quedó en el panel */ }
+  finally{ actualizarMV(); }
 };
 $('#recPlay').onclick = async ()=>{
   const b = await kv.get('voz', 'grabacion'); if(!b) return;
@@ -2222,14 +2289,17 @@ function updateVoiceBtn(){
 }
 // Versión del código que está corriendo: sirve para saber si el teléfono se quedó con una copia vieja
 // (tiene que coincidir con CACHE en sw.js; si no coincide, cierra la app y vuelve a abrirla con internet).
-const VERSION_APP = 'v43';
+const VERSION_APP = 'v44';
 function verVersion(){
   const el = $('#verApp'); if(!el) return;
-  caches.keys().then(ks => {
-    const guardado = ks.find(k => /^lectora-v\d+$/.test(k)) || 'sin copia guardada';
-    el.textContent = `Versión de la app: ${VERSION_APP} · guardada en este teléfono: ${guardado}` +
-      (guardado === 'lectora-' + VERSION_APP ? '' : ' (falta actualizar: cierra la app y ábrela otra vez con internet)');
-  }).catch(()=>{});
+  if(!self.caches){ el.textContent = 'Versión de la app: ' + VERSION_APP; return; }
+  try{
+    caches.keys().then(ks => {
+      const guardado = ks.find(k => /^lectora-v\d+$/.test(k)) || 'sin copia guardada';
+      el.textContent = `Versión de la app: ${VERSION_APP} · guardada en este teléfono: ${guardado}` +
+        (guardado === 'lectora-' + VERSION_APP ? '' : ' (falta actualizar: cierra la app y ábrela otra vez con internet)');
+    }).catch(()=>{});
+  }catch(e){ el.textContent = 'Versión de la app: ' + VERSION_APP; }
 }
 // Qué está haciendo «Mi voz» con este libro: si la voz está grabada, qué voces base usa para español e
 // inglés (si sale una voz con acento ajeno, aquí se ve si el libro se está leyendo en el idioma equivocado)

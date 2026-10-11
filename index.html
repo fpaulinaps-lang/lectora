@@ -255,6 +255,12 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
           <button class="btn ghost" id="recPlay" hidden>Escuchar grabación</button>
           <button class="btn ghost" id="mvTest" hidden>Probar mi voz</button>
         </div>
+        <div class="row">
+          <button class="btn ghost" id="recPick">Usar un audio grabado</button>
+          <input type="file" id="recFile" accept="audio/*" hidden>
+        </div>
+        <p class="hint" id="recAviso" hidden></p>
+        <p class="hint">Si tu navegador no te da el micrófono, graba con la app <b>Notas de Voz</b> del iPhone (unos 50 segundos leyendo el texto de arriba), compártelo a <b>Archivos</b> y toca «Usar un audio grabado».</p>
         <p class="hint" id="mvTestNote"></p>
         <div class="panel" id="mvPrepBox" hidden>
           <span class="lbl">Pre-generar libro completo (opcional)</span>
