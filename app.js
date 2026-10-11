@@ -246,7 +246,10 @@ const isAudioDoc = () => doc && doc.kind === 'audio';
 const PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/';
 const VOCES_NA = {
   es: [{id: 'es_MX-claude-high', ruta: 'es/es_MX/claude/high', nombre: 'Claude · México', mb: 63},
-       {id: 'es_AR-daniela-high', ruta: 'es/es_AR/daniela/high', nombre: 'Daniela · Argentina', mb: 114},
+       // Daniela es la única voz argentina de Piper y el modelo más pesado de todos: medido, tarda
+       // ~1,45 veces lo que dura el audio (las demás voces van ~6 veces más rápido que la lectura),
+       // así que en vivo hace una pausa en cada frase. Con «Preparar audio completo» funciona bien.
+       {id: 'es_AR-daniela-high', ruta: 'es/es_AR/daniela/high', nombre: 'Daniela · Argentina', mb: 114, lenta: true},
        {id: 'es_ES-sharvard-medium', ruta: 'es/es_ES/sharvard/medium', nombre: 'Sharvard · España', mb: 77}],
   en: [{id: 'en_US-lessac-medium', ruta: 'en/en_US/lessac/medium', nombre: 'Lessac · EE. UU.', mb: 63},
        {id: 'en_US-amy-medium', ruta: 'en/en_US/amy/medium', nombre: 'Amy · EE. UU.', mb: 63}],
@@ -1709,9 +1712,12 @@ async function alimentarST(){
               diag(`esperando la voz: frase ${ST.sig} de ${flat.length} · listas ${MV.enDisco.size} · en curso ${MV.enCurso.size} · memoria ${MV.mem.size}`);
               // si el teléfono no alcanza a generar al ritmo de la lectura, se ofrece la vía segura: preparar todo
               if(document.visibilityState === 'visible'){
-                const ofrecer = esMiVoz() && !MV.prep;
+                // Si la voz no alcanza el ritmo de la lectura, se ofrece la vía que sí funciona: preparar
+                // todo el libro por adelantado (sirve para «Mi voz» y para una voz natural lenta).
+                const ofrecer = esMiVoz() ? !MV.prep : (esNatural() && !NA.prep);
                 const aviso = esMiVoz() ? 'Generando tu voz… (sigue sola en cuanto esté lista)' : 'Generando la voz… (sigue sola en cuanto esté lista)';
-                showStatus(aviso, null, null, ofrecer ? 'Pre-generar el libro' : null, ofrecer ? ()=>{ hideStatus(); prepararMV(); } : null);
+                showStatus(aviso, null, null, ofrecer ? 'Pre-generar el libro' : null,
+                  ofrecer ? ()=>{ hideStatus(); if(esMiVoz()) prepararMV(); else prepararLibroNA(); } : null);
               }
             }
             if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
@@ -2046,20 +2052,30 @@ function setModo(m){
 document.querySelectorAll('.seg button').forEach(b => b.onclick = () => setModo(b.dataset.modo));
 
 /* ---------- Elegir la voz natural ---------- */
+// Aviso para las voces que no alcanzan el ritmo de lectura (Daniela · Argentina): sin preparar el libro
+// por adelantado, la lectura hace una pausa en cada frase (medido: tarda 1,45 veces lo que dura el audio).
+function avisoVozLenta(){
+  const el = $('#naNote'); if(!el) return;
+  const lenta = ['es', 'en'].map(l => vozNA(l)).find(v => v && v.lenta);
+  el.textContent = lenta ? `${lenta.nombre} tarda más en generarse que en leerse: prepara el libro completo antes de escuchar, o elige otra voz.` : '';
+}
 function llenarNA(){
   const prepBtn = $('#naPrep');
   if(prepBtn) prepBtn.onclick = prepararLibroNA;
+  avisoVozLenta();
   actualizarNA();
   for(const l of ['es', 'en']){
     const sel = $(l === 'es' ? '#naEs' : '#naEn'), elegida = vozNA(l).id; sel.innerHTML = '';
     for(const v of VOCES_NA[l]){
-      const o = document.createElement('option'); o.value = v.id; o.textContent = `${v.nombre} (${v.mb} MB)`;
+      const o = document.createElement('option'); o.value = v.id;
+      o.textContent = `${v.nombre} (${v.mb} MB)` + (v.lenta ? ' · genera lento, conviene preparar el libro' : '');
       o.selected = v.id === elegida; sel.appendChild(o);
     }
     sel.onchange = ()=>{
       const seguia = playing || NA.seguir; if(playing) stop();
       store.set('na:' + l, sel.value); olvidarBloques(); soltarNA(); updateVoiceBtn();
       diag('cambiaste la voz a ' + vozNA(l).nombre);
+      avisoVozLenta();
       NA.seguir = seguia; precalentarNA(seguia, 800);       // si cambias varias veces seguidas, carga solo la última
     };
   }
@@ -2206,7 +2222,7 @@ function updateVoiceBtn(){
 }
 // Versión del código que está corriendo: sirve para saber si el teléfono se quedó con una copia vieja
 // (tiene que coincidir con CACHE en sw.js; si no coincide, cierra la app y vuelve a abrirla con internet).
-const VERSION_APP = 'v42';
+const VERSION_APP = 'v43';
 function verVersion(){
   const el = $('#verApp'); if(!el) return;
   caches.keys().then(ks => {
@@ -2215,12 +2231,26 @@ function verVersion(){
       (guardado === 'lectora-' + VERSION_APP ? '' : ' (falta actualizar: cierra la app y ábrela otra vez con internet)');
   }).catch(()=>{});
 }
+// Qué está haciendo «Mi voz» con este libro: si la voz está grabada, qué voces base usa para español e
+// inglés (si sale una voz con acento ajeno, aquí se ve si el libro se está leyendo en el idioma equivocado)
+// y cuántas frases detectó en cada idioma.
+function verMiVoz(){
+  const el = $('#verMiVoz'); if(!el) return;
+  if(!doc || isAudioDoc()){ el.textContent = ''; return; }
+  const n = {es: 0, en: 0};
+  for(const f of flat) n[f.l === 'en' ? 'en' : 'es']++;
+  const b = MV.base || store.get('vozBase');
+  const base = b ? `${b.es.id} (español) / ${b.en.id} (inglés)` : 'sin elegir todavía';
+  el.textContent = `Mi voz: ${store.get('vozSE') ? 'voz grabada' : 'sin grabar'} · voces base: ${base} · ` +
+    `frases del libro: ${n.es} en español, ${n.en} en inglés` +
+    (n.en && n.es ? ' (cada frase se lee con la voz del idioma que se le detecta)' : '');
+}
 function openSheet(){
   const a = isAudioDoc();
   $('#engineBox').hidden = a; $('#audioNote').hidden = !a;
   setModo(modo); llenarNA();
   $('#diagTexto').textContent = store.get('diag', []).slice().reverse().join('\n') || 'Todavía no hay nada anotado.';
-  verVersion();
+  verVersion(); verMiVoz();
   if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(()=>{ mostrarAdelanto(); actualizarNA(); });
   $('#scrim').hidden = false; fillVoices();
 }
