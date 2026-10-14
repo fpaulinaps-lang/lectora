@@ -131,6 +131,32 @@ body.leyendo main{padding-block:14px 190px}
 .seg button{border:0; background:transparent; padding:10px 6px; font-size:.9rem; font-weight:700; color:var(--muted); border-left:1px solid var(--line)}
 .seg button:first-child{border-left:0}
 .seg button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
+.guia{position:fixed; inset:0; z-index:20; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center;
+  padding:calc(10px + env(safe-area-inset-top,0px)) 10px calc(10px + env(safe-area-inset-bottom,0px))}
+.guia[hidden]{display:none}
+.guia-card{width:100%; max-width:30rem; height:100%; max-height:46rem; background:var(--paper); border-radius:20px; padding:14px 16px 16px;
+  display:flex; flex-direction:column; gap:10px; overflow:hidden}
+.guia-card header{display:flex; justify-content:space-between; align-items:center}
+.guia-card h2{font-family:var(--read); font-size:1.2rem; margin:0}
+.guia-x{border:0; background:transparent; font-size:1.7rem; line-height:1; color:var(--muted); padding:2px 8px}
+.guia-pant{display:flex; flex-direction:column; gap:12px; flex:1; min-height:0}
+.guia-pant[hidden]{display:none}
+.guia-pasos{margin:0; padding-left:1.25em; display:flex; flex-direction:column; gap:7px; font-size:.95rem; line-height:1.4; flex:1; min-height:0}
+.guia-botones{display:flex; gap:10px; justify-content:center; flex-wrap:wrap}
+.guia-aviso{min-height:1.2em; text-align:center}
+.sim{background:var(--bg); border-radius:12px; padding:10px 12px}
+.sim .fila{display:flex; justify-content:space-between; align-items:baseline; font-size:.82rem; font-weight:700; color:var(--muted)}
+.sim b{font-size:1.45rem; color:var(--ink); font-variant-numeric:tabular-nums}
+.sim .prog{height:12px; border-radius:6px; margin-top:6px}
+.sim .hint{margin-top:6px}
+.sim.lleno .prog i{background:#2e9e5b}
+.frase-num{margin:0; font-size:.78rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted)}
+.frase{font-family:var(--read); font-size:clamp(1.15rem, 5.6vw, 1.55rem); line-height:1.45; margin:0; flex:1; min-height:0; display:flex; align-items:center}
+.rec-big{align-self:center; flex:none; width:88px; height:88px; border-radius:50%; border:0; background:var(--accent); color:var(--accent-ink); font-weight:800; font-size:1rem}
+.rec-big.on{animation:latido 1.1s ease-in-out infinite}
+.rec-big:disabled{opacity:.5}
+@keyframes latido{50%{transform:scale(1.07)}}
+@media (max-height:640px){ .guia-pasos{font-size:.88rem; gap:5px} .rec-big{width:74px; height:74px} .frase{font-size:clamp(1.05rem, 5vw, 1.3rem)} }
 .diag{margin:14px 0}
 .diag summary{font-weight:700; color:var(--muted); cursor:pointer; padding:6px 0}
 .diag pre{white-space:pre-wrap; word-break:break-word; font-size:.72rem; line-height:1.45; max-height:260px; overflow:auto; background:var(--paper); color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:10px; margin:6px 0 0}
@@ -242,10 +268,11 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       <div class="panel" data-panel="mivoz" hidden>
         <p class="hint">Lee tus libros con tu voz usando clonación por inteligencia artificial. Una vez grabada tu voz, <b>puedes tocar «Leer» (▶) directamente</b>: la lectura comienza al vuelo y el teléfono genera las siguientes frases en segundo plano mientras escuchas. La primera vez descarga el motor (~180 MB por única vez; usa Wi-Fi).</p>
         <div id="recEmpty" class="panel">
-          <p class="hint">Primero graba leyendo este texto en voz alta, con tu tono normal y en un lugar sin ruido. Son unos 50 segundos: mientras más leas, mejor queda tu voz.</p>
+          <p class="hint">Toca «Grabar mi voz»: leerás frases cortas, una por una, y después de cada una verás cuánto se parece tu voz clonada a la tuya. Si prefieres grabar con Notas de Voz, lee este texto:</p>
           <p class="script" id="recTexto">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención, y por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden solas. Cuando leo en voz alta escucho mejor lo que digo: las palabras pesan distinto y aparecen matices que la lectura silenciosa esconde. Por eso leo despacio, marcando bien cada sonido: la jota de jarra, la erre de carretera, la eñe de años, la zeta de zapato y la lluvia suave sobre la ventana. Hoy voy a leer varios documentos importantes, página por página, hasta terminarlos.</p>
         </div>
         <p class="note" id="recDone" hidden>Tu voz está grabada. La lectura se parece a ti en el tono; no copia exactamente tu acento ni tu manera de hablar.</p>
+        <p class="hint" id="recSim" hidden></p>
         <div id="recLive" class="panel" hidden>
           <div class="meter"><i id="recLevel"></i></div>
           <p class="hint" id="recTime"></p>
@@ -294,6 +321,58 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       <p><b>Voz natural:</b> también sigue sonando en otras apps y con el teléfono bloqueado. Genera la voz por tandas, unos minutos por adelantado, y entre tandas el procesador descansa.</p>
       <p><b>Mi voz ya preparada:</b> sigue sonando mientras usas otras apps y con el teléfono bloqueado, como un podcast. Es lo que menos batería gasta. Prepararla sí gasta: hazlo cargando.</p>
       <p><b>Voz del teléfono:</b> el iPhone la pausa si sales de LectorLibre o bloqueas la pantalla (sigue sola al volver). Mientras escuchas, la pantalla se pone negra sola a los 20 segundos sin tocarla (toca dos veces para volver); baja también el brillo.</p>
+    </div>
+  </div>
+</div>
+
+<div class="guia" id="guia" hidden role="dialog" aria-modal="true" aria-labelledby="guiaTit">
+  <div class="guia-card">
+    <header><h2 id="guiaTit">Graba tu voz</h2><button class="guia-x" id="guiaCerrar" aria-label="Cerrar">×</button></header>
+
+    <div class="guia-pant" id="guiaIntro">
+      <ol class="guia-pasos">
+        <li>Vas a leer <b>frases cortas, una por una</b>.</li>
+        <li>Busca un lugar <b>en silencio</b> y habla a un palmo del teléfono, con tu tono normal.</li>
+        <li>Toca <b>● Grabar</b>, lee la frase y espera: se detiene sola cuando terminas.</li>
+        <li>Después de cada frase, LectorLibre la lee con tu voz clonada y la compara con la tuya: <b>la barra muestra cuánto se parecen</b>.</li>
+        <li>Sigue hasta que <b>la barra se llene</b>: ahí tu voz ya no mejora con más frases (suelen ser entre 6 y 12, unos 3 minutos).</li>
+      </ol>
+      <p class="hint" id="guiaDescarga">La primera vez se baja el motor de voz (unos 180 MB): usa Wi-Fi.</p>
+      <p class="hint guia-aviso" id="guiaAviso" hidden></p>
+      <div class="guia-botones">
+        <button class="btn rec" id="guiaEmpezar">Empezar</button>
+        <button class="btn ghost" id="guiaDeCero" hidden>Empezar de cero</button>
+      </div>
+    </div>
+
+    <div class="guia-pant" id="guiaFrase" hidden>
+      <div class="sim" id="guiaSim">
+        <div class="fila"><span>Similitud con tu voz</span><b id="guiaSimVal">—</b></div>
+        <div class="prog"><i id="guiaSimBar"></i></div>
+        <p class="hint" id="guiaSimNota">Graba la primera frase para medirla.</p>
+      </div>
+      <p class="frase-num" id="guiaNum">Frase 1</p>
+      <p class="frase" id="guiaTexto"></p>
+      <div class="meter"><i id="guiaNivel"></i></div>
+      <button class="rec-big" id="guiaGrabar">● Grabar</button>
+      <div class="guia-botones">
+        <button class="btn ghost" id="guiaOtra">Otra frase</button>
+        <button class="btn ghost" id="guiaTerminar">Terminar por ahora</button>
+      </div>
+      <p class="hint guia-aviso" id="guiaEstado"></p>
+    </div>
+
+    <div class="guia-pant" id="guiaFin" hidden>
+      <div class="sim lleno">
+        <div class="fila"><span>Similitud lograda</span><b id="guiaFinVal">—</b></div>
+        <div class="prog"><i style="width:100%"></i></div>
+      </div>
+      <p class="frase" id="guiaFinTexto">Llegaste a la máxima similitud posible con tu voz: grabar más frases ya no la mejora.</p>
+      <p class="hint" id="guiaFinNota"></p>
+      <div class="guia-botones">
+        <button class="btn ghost" id="guiaProbar">Probar mi voz</button>
+        <button class="btn rec" id="guiaListo">Listo</button>
+      </div>
     </div>
   </div>
 </div>

@@ -311,7 +311,7 @@ async function removeBook(key){
   if(doc && doc.key === key){ stop(); doc = null; }
   setLib(lib().filter(x=>x.key!==key));
   store.del('pos:'+key); store.del('time:'+key);
-  await Promise.all([tx('docs','readwrite', s=>s.delete(key)), kv.del('audio', key), kv.del('portadas', key), kv.delPrefix('pistas', key + '|')]);
+  await Promise.all([tx('docs','readwrite', s=>s.delete(key)), kv.del('audio', key), kv.del('portadas', key), kv.delPrefix('pistas', key + '|'), kv.delPrefix('pistas', 'na|' + key + '|')]);   // tu voz y la voz natural de ese libro
   const u = urlsPortada.get(key); if(u) URL.revokeObjectURL(u); urlsPortada.delete(key);
 }
 // Duración de la lectura en voz alta a velocidad normal (1×). Medido con la voz Paulina de Apple:
@@ -435,7 +435,7 @@ function setDoc(d, pos){
   if(zipUrl){ URL.revokeObjectURL(zipUrl); zipUrl = null; audioZip.removeAttribute('src'); audioZip.load(); }
   MV.pref = null; olvidarBloques(); pararNA(true);
   if(MV.prep){ MV.prep = false; MV.prepTok++; store.del('prepActiva'); }
-  if(NA.prep){ NA.prep = false; }
+  if(NA.prep){ NA.prep = false; NA.prepTok++; }
   $('#blackBtn').hidden = isAudioDoc() || modo !== 'telefono';
   updateVoiceBtn();
   actualizarNA();
@@ -811,6 +811,12 @@ const paginaLista = p => { const f = frasesDePagina(p); return f.length > 0 && f
 
 // Carga el motor (la primera vez descarga unos 180 MB) y elige la voz natural más parecida a la tuya.
 async function motorMV(avance = ()=>{}){
+  await motorBaseMV(avance);
+  await elegirBase();
+}
+// El motor de voz (voz natural + conversor de timbre) sin exigir una voz grabada: la grabación guiada lo usa
+// para medir la similitud antes de que exista tu voz.
+async function motorBaseMV(avance = ()=>{}){
   if(!MV.M) MV.M = await import('./voz/motor.js');
   if(!MV.configurado){
     MV.configurado = true;
@@ -820,7 +826,6 @@ async function motorMV(avance = ()=>{}){
   }
   await MV.M.prepararVoz(avance);
   await MV.M.prepararConversor(avance);
-  await elegirBase();
 }
 async function elegirBase(){
   const h = store.get('vozSE'); if(!h) throw new Error('Primero graba tu voz.');
@@ -856,8 +861,8 @@ async function precalentarMV(){
   try{
     if(!MV.M) MV.M = await import('./voz/motor.js');
     if(await MV.M.modelosGuardados(true)){
-      await motorMV(()=>{});
-      asegurarCfgMV().catch(()=>{});   // deja listos la voz base y los procesos antes de tocar «Leer»
+      await motorMV(()=>{});           // la voz base lista; los procesos de más se abren al tocar «Leer»
+                                       // (abrirlos al abrir el libro gastaba memoria y batería sin estar leyendo)
     }
   }catch(e){}
 }
@@ -959,6 +964,9 @@ function actualizarMV(){
   $('#recEmpty').hidden = tiene; $('#recDone').hidden = !tiene;
   $('#recBtn').textContent = tiene ? '● Grabar de nuevo' : '● Grabar mi voz';
   $('#recPlay').hidden = !tiene; $('#mvTest').hidden = !tiene;
+  const g = store.get('vozGuia', null), sg = g && g.sims && g.sims.length ? g.sims.slice(-3).reduce((x, y) => x + y, 0) / Math.min(3, g.sims.length) : null;
+  $('#recSim').hidden = sg == null;
+  if(sg != null) $('#recSim').textContent = `Similitud de tu voz clonada: ${Math.round(sg * 100)}%` + (g.completo ? ' (la máxima posible)' : ` · toca «Grabar mi voz» para seguir mejorándola`);
   $('#mvPrepBox').hidden = !tiene || !doc || isAudioDoc();
   if(!doc || isAudioDoc() || !tiene) return;
   const conTexto = doc.pages.map((_, p) => p).filter(p => frasesDePagina(p).length);
@@ -987,7 +995,7 @@ const ADELANTE_SEG = 45 * 60;
 // Un solo proceso genera la voz: cada uno necesita cientos de MB y el iPhone cierra la página si se pasa
 // («Ocurrió un problema»). (La app es solo para celular.)
 const NA = {ws: [], max: 1, limite: Infinity, n: 0, pend: new Map(), cargadas: new Map(), bajadas: new Map(), sr: 22050,
-            tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), cub: null, enCurso: new Map(), pref: null, prep: false, falta: null};
+            tok: 0, pos: -1, corre: false, dormidos: [], esperas: new Map(), hechas: new Map(), cub: null, enCurso: new Map(), pref: null, prep: false, prepTok: 0, falta: null};
 
 function procesoNA(k){
   if(NA.ws[k]) return NA.ws[k];
@@ -1100,10 +1108,19 @@ async function discoNA(){
     if(!NA.hechas.has(i)){ NA.hechas.set(i, {hasta, n, k}); marcarNA(i, hasta); }
   }
   actualizarNA();
-  // lo de otros libros u otras voces ya no se usa: se borra
-  const otros = new Set();
-  for(const k of await kv.keys('pistas', 'na|') || []) if(!k.startsWith(pref)) otros.add(k.split('|').slice(0, 3).join('|') + '|');
-  for(const p of otros) kv.delPrefix('pistas', p).catch(()=>{});
+  // Se borra la voz natural de otras voces (ya no sirve) y la de libros que no se abren hace más de 14 días
+  // o que ya no están en la biblioteca. Lo preparado de los demás libros se conserva («Preparar audio
+  // completo» no se pierde al abrir otro libro). La clave termina en |frase|hasta|muestras, y el nombre del
+  // libro puede llevar «|», así que se lee desde el final.
+  const voces = `${vozNA('es').id}+${vozNA('en').id}`, libros = new Map(lib().map(x => [x.key, x])), viejo = Date.now() - 14 * 864e5;
+  const borrar = new Set();
+  for(const k of await kv.keys('pistas', 'na|') || []){
+    if(k.startsWith(pref)) continue;
+    const partes = k.split('|'), v = partes[partes.length - 4], libro = partes.slice(1, -4).join('|');
+    const it = libros.get(libro);
+    if(v !== voces || (libro !== 'ejemplo' && (!it || (it.opened || it.added || 0) < viejo))) borrar.add(`na|${libro}|${v}|`);
+  }
+  for(const p of borrar) kv.delPrefix('pistas', p).catch(()=>{});
 }
 // Qué frases ya están listas, en una tabla: antes se recorría la lista entera por cada frase (con un libro
 // largo eso era lentísimo y la app parecía colgada al preparar o al mostrar el avance).
@@ -1148,10 +1165,10 @@ function actualizarNA(){
   $('#naPrep').textContent = NA.prep ? 'Detener' : (listas ? (listas === conTexto.length ? 'Repreparar audio completo' : 'Seguir preparando') : 'Preparar audio completo');
 }
 async function prepararLibroNA(){
-  if(NA.prep){ NA.prep = false; NA.tok++; actualizarNA(); return; }
+  if(NA.prep){ NA.prep = false; NA.prepTok++; actualizarNA(); return; }
   if(!doc || isAudioDoc()) return;
   NA.prep = true;
-  const tok = ++NA.tok, d = doc;
+  const tok = ++NA.prepTok, d = doc;   // turno propio: leer mientras se prepara no la corta (ni al revés)
   holdScreen(true);
   try{
     await discoNA();
@@ -1163,14 +1180,14 @@ async function prepararLibroNA(){
 
     for(let k = 0; k < orden.length; k++){
       const i = orden[k];
-      if(tok !== NA.tok || doc !== d) break;
+      if(tok !== NA.prepTok || doc !== d) break;
       if(fraseHechaNA(i)) continue;
       const hasta = finUnidad(i), s = flat[i];
       let texto = textoNA(s); for(let j = i + 1; j <= hasta; j++) texto += ' ' + textoNA(flat[j]);
       await cargarVozNA(s.l, 0);
-      if(tok !== NA.tok || doc !== d) break;
+      if(tok !== NA.prepTok || doc !== d) break;
       const a = await llamarNA('hablar', [vozNA(s.l).id, texto], [], 0);
-      if(tok !== NA.tok || doc !== d || firmaNA() !== pref) break;
+      if(tok !== NA.prepTok || doc !== d || firmaNA() !== pref) break;
       const v = empacar(recortarNA(a)), clave = pref + String(i).padStart(7, '0') + '|' + hasta + '|' + v.n;
       await kv.put('pistas', clave, v);
       NA.hechas.set(i, {hasta, n: v.n, k: clave}); marcarNA(i, hasta);
@@ -1183,7 +1200,7 @@ async function prepararLibroNA(){
     diag('error preparando libro natural: ' + (e && e.message || e));
     $('#naEstado').textContent = (e && e.message) || String(e);
   }finally{
-    if(tok === NA.tok){ NA.prep = false; NA.falta = null; }
+    if(tok === NA.prepTok){ NA.prep = false; NA.falta = null; }
     if(!playing) holdScreen(false);
     actualizarNA();
   }
@@ -1586,7 +1603,7 @@ function olvidarBloques(){
 const MSE = window.ManagedMediaSource || window.MediaSource;
 const CONTINUO = !!MSE && MSE.isTypeSupported('audio/mpeg') && store.get('continuo', true);
 const RETRASO_MP3 = 1105;          // muestras que el codificador MP3 agrega al comienzo
-const CARGADO_SEG = 1800;          // cuánto audio se deja cargado por delante en el reproductor (hasta 30 min)
+const CARGADO_SEG = 300;           // cuánto audio se deja cargado por delante en el reproductor (más puede pasar el límite del iPhone)
 const ST = {tok: 0, ms: null, sb: null, url: null, sr: 0, muestras: 0, linea: [], sig: 0, fin: false, motivoFin: '', alimentando: false,
             w: null, n: 0, pend: new Map(), limpiado: 0};
 
@@ -1706,7 +1723,10 @@ async function alimentarST(){
             if(esMiVoz()) pedirMV(ST.sig);
             pedido = F.primera(ST.sig).then(()=>{}, ()=>{}).then(() => { pedido = null; });
           }
-          if(cargadoST() < 0.35 && audioVoz.currentTime > 0.1){
+          const fuera = document.visibilityState === 'hidden';
+          // en pantalla basta un margen corto; fuera de ella el iPhone despierta la app cada ~1 s o más,
+          // así que se deja más silencio por delante para que el audio nunca se vacíe
+          if(cargadoST() < (fuera ? 3 : 0.35) && audioVoz.currentTime > 0.1){
             if(!MV.esperando){
               MV.esperando = Date.now(); MV.silencios++;
               diag(`esperando la voz: frase ${ST.sig} de ${flat.length} · listas ${MV.enDisco.size} · en curso ${MV.enCurso.size} · memoria ${MV.mem.size}`);
@@ -1721,10 +1741,11 @@ async function alimentarST(){
               }
             }
             if(Date.now() - MV.esperando > 3 * 60 * 1000){ MV.esperando = 0; stop(); showStatus('La voz se detuvo. Toca reproducir para seguir.'); return; }
-            MV.silencioSeg += 0.3;
-            await silencioST(tok, 0.3);
+            const seg = fuera ? 2 : 0.3;
+            MV.silencioSeg += seg;
+            await silencioST(tok, seg);
           }
-          await Promise.race([pedido || dormir(50), dormir(50)]);   // nunca gira en vacío
+          await Promise.race([pedido || dormir(fuera ? 500 : 100), dormir(fuera ? 500 : 100)]);   // nunca gira en vacío
         }
         if(tok !== ST.tok || !playing) break;
       }
@@ -2017,60 +2038,281 @@ async function guardarVoz(blob, ctx){
     throw e;
   }finally{ if(propio){ try{ c.close(); }catch(e){} } }
 }
-$('#recBtn').onclick = async ()=>{
-  if(grabando){ grabando.terminar(); return; }
-  avisoMiVoz('');
-  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    avisoMiVoz('Este navegador no da acceso al micrófono. ' + ayudaMicrofono() + ' Mientras tanto, graba con Notas de Voz y toca «Usar un audio grabado».', true);
-    return;
+/* ---------- Grabación guiada: frases cortas y similitud medida ---------- */
+// En vez de un texto largo, frases cortas (caben enteras en la pantalla del teléfono), una por ventana.
+// Cada grabación aporta su huella de voz; tu voz es el promedio de todas. Después de cada frase se mide:
+// la voz clonada lee esa misma frase (armada SIN esa grabación, para que la medida sea honesta) y se compara
+// su huella con la de tu grabación real. La barra se llena cuando grabar más ya no cambia tu huella
+// (dos frases seguidas casi sin cambio): desde ahí la similitud ya no puede mejorar con más frases.
+const FRASES_VOZ = [
+  'El sol de la mañana entraba despacio por la ventana de la cocina.',
+  '¿Quién dejó las llaves encima de la mesa del comedor?',
+  'Mi abuela guardaba cartas viejas en una caja de madera.',
+  '¡Qué alegría verte otra vez después de tantos años!',
+  'Necesito comprar pan, queso, tomates y un poco de café.',
+  'El tren de las ocho y media llegó con veinte minutos de retraso.',
+  'Cuando llueve, el camino hacia el pueblo se llena de barro.',
+  'La jueza escuchó con atención a cada uno de los testigos.',
+  '¿Te parece si mañana salimos a caminar junto al río?',
+  'Guillermo arregló la bicicleta con una llave inglesa.',
+  'Hay que leer el contrato completo antes de firmarlo.',
+  'Ayer cociné una sopa de zapallo con jengibre y limón.',
+  '¡Cuidado, que el piso está mojado y te puedes resbalar!',
+  'Ella sonrió, cerró el libro y apagó la luz de la lámpara.',
+  'En invierno las noches son largas y frías en el sur.',
+  '¿Cuántos kilómetros faltan para llegar a la costa?',
+  'El viejo reloj de la torre marcaba las doce en punto.',
+  'Fuimos al mercado y volvimos cargados de frutas y verduras.',
+  'La profesora explicó la lección con paciencia y buen humor.',
+  'Siempre que viajo llevo un cuaderno para anotar lo que veo.',
+];
+const GUIA_MIN = 5, GUIA_MAX = 20, GUIA_ESTABLE = 0.9995;
+const GV = {abierta: false, stream: null, ctx: null, an: null, rec: null, raf: 0, n: 0, emb: [], sims: [], estables: 0,
+            completo: false, cola: Promise.resolve(), pend: 0, motor: null, huellas: null, grabando: false, midiendo: 0, porMedir: null};
+
+function cargarGuia(){
+  const g = store.get('vozGuia', null);
+  GV.emb = g ? g.emb.map(x => Float32Array.from(x)) : [];
+  GV.sims = g ? g.sims.slice() : [];
+  GV.n = g ? g.n : 0; GV.estables = g ? g.estables : 0; GV.completo = !!(g && g.completo);
+}
+function guardarGuia(){
+  store.set('vozGuia', {emb: GV.emb.map(x => Array.from(x)), sims: GV.sims, n: GV.n, estables: GV.estables, completo: GV.completo});
+}
+const promedioHuellas = l => { const m = new Float32Array(l[0].length); for(const e of l) for(let k = 0; k < m.length; k++) m[k] += e[k] / l.length; return m; };
+// similitud mostrada: el promedio de las últimas 3 frases (una sola frase puede salir alta o baja por azar)
+const simGuia = () => { const u = GV.sims.slice(-3); return u.length ? u.reduce((x, y) => x + y, 0) / u.length : null; };
+
+// El motor (voz natural + conversor de timbre), sin exigir una voz ya grabada.
+function cargarMotorGuia(){
+  if(!GV.motor){
+    GV.motor = (async ()=>{
+      const avance = (msg, n, t) => {
+        $('#guiaDescarga').textContent = t > 1000 ? `${msg}: ${Math.round(n / 1e6)} de ${Math.round(t / 1e6)} MB (solo la primera vez; usa Wi-Fi).` : msg + '…';
+      };
+      await motorBaseMV(avance);
+      $('#guiaDescarga').textContent = 'Motor de voz listo.';
+    })();
+    GV.motor.catch(e => { GV.motor = null; $('#guiaDescarga').textContent = 'No se pudo bajar el motor de voz: ' + (e.message || e) + '. Revisa la conexión y vuelve a abrir esta ventana.'; });
   }
-  if(!window.MediaRecorder){
-    avisoMiVoz('Este navegador no puede grabar desde la app. Graba con la app Notas de Voz del iPhone, compártelo a Archivos y toca «Usar un audio grabado».', true);
-    return;
+  return GV.motor;
+}
+async function baseDesde(tgt){
+  if(!GV.huellas) GV.huellas = await (await fetch('voz/huellas-base.json')).json();
+  let mejor = null;
+  for(const id of ['ef_dora', 'em_alex']){
+    const se = Float32Array.from(GV.huellas[id]), sim = MV.M.parecido(se, tgt);
+    if(!mejor || sim > mejor.sim) mejor = {id, se, sim};
   }
-  let stream;
-  try{ stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1}}); }
-  catch(e){
-    const que = e && e.name === 'NotAllowedError' ? 'El navegador no dio permiso para el micrófono.' : 'No pude usar el micrófono (' + ((e && e.name) || 'error') + ').';
-    avisoMiVoz(que + ' ' + ayudaMicrofono() + ' También puedes grabar con Notas de Voz y tocar «Usar un audio grabado».', true);
-    return;
+  return mejor;
+}
+
+function pantallaGuia(cual){
+  for(const id of ['guiaIntro', 'guiaFrase', 'guiaFin']) $('#' + id).hidden = id !== cual;
+}
+function pintarSimilitud(){
+  const s = simGuia(), pct = s == null ? null : Math.max(0, Math.min(100, Math.round(s * 100)));
+  $('#guiaSimVal').textContent = pct == null ? '—' : pct + '%';
+  $('#guiaSimBar').style.width = (GV.completo ? 100 : pct || 0) + '%';
+  $('#guiaSim').classList.toggle('lleno', GV.completo);
+  let nota;
+  if(GV.completo) nota = 'Máxima similitud alcanzada.';
+  else if(GV.midiendo) nota = `Midiendo la similitud con la frase ${GV.midiendo}… puedes seguir grabando.`;
+  else if(GV.pend) nota = 'Analizando lo que grabaste…';
+  else if(!GV.sims.length) nota = 'Graba la primera frase para medirla.';
+  else if(GV.emb.length < GUIA_MIN) nota = `Faltan al menos ${GUIA_MIN - GV.emb.length} frases para afinar tu voz.`;
+  else nota = GV.estables ? 'Casi: tu voz ya casi no cambia con más frases.' : 'Cada frase afina tu voz. Sigue grabando.';
+  $('#guiaSimNota').textContent = nota;
+}
+function mostrarFrase(){
+  pantallaGuia('guiaFrase');
+  $('#guiaNum').textContent = `Frase ${GV.n + 1}`;
+  $('#guiaTexto').textContent = FRASES_VOZ[GV.n % FRASES_VOZ.length];
+  $('#guiaGrabar').textContent = '● Grabar'; $('#guiaGrabar').classList.remove('on'); $('#guiaGrabar').disabled = false;
+  $('#guiaNivel').style.width = '0%';
+  pintarSimilitud();
+}
+
+function abrirGuia(){
+  cargarGuia();
+  GV.abierta = true;
+  $('#guia').hidden = false;
+  $('#guiaAviso').hidden = true;
+  const s = simGuia();
+  if(GV.completo){
+    $('#guiaEmpezar').textContent = 'Grabar de nuevo desde cero'; $('#guiaDeCero').hidden = true;
+    $('#guiaAviso').hidden = false; $('#guiaAviso').textContent = `Ya llegaste a la máxima similitud (${Math.round(s * 100)}%).`;
+  } else if(GV.emb.length){
+    $('#guiaEmpezar').textContent = `Seguir (${GV.emb.length} frases grabadas)`; $('#guiaDeCero').hidden = false;
+  } else { $('#guiaEmpezar').textContent = 'Empezar'; $('#guiaDeCero').hidden = true; }
+  pantallaGuia('guiaIntro');
+  cargarMotorGuia();
+}
+async function empezarGuia(deCero){
+  if(deCero){ GV.emb = []; GV.sims = []; GV.n = 0; GV.estables = 0; GV.completo = false; guardarGuia(); }
+  const aviso = t => { $('#guiaAviso').hidden = !t; $('#guiaAviso').textContent = t || ''; };
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
+    aviso('Este navegador no deja grabar desde la app. ' + ayudaMicrofono()); return;
   }
   try{
-    $('#recLive').hidden = false; $('#recEmpty').hidden = false; $('#recDone').hidden = true;
-    const partes = [], rec = new MediaRecorder(stream);
-    rec.ondataavailable = e => { if(e.data.size) partes.push(e.data); };
-    const ctx = new (window.AudioContext || window.webkitAudioContext)(); ctx.resume().catch(()=>{});
-    const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an);
-    const buf = new Uint8Array(an.fftSize), t0 = Date.now(); let raf;
-    // La duración sale del texto de prueba: así, si el texto se alarga, la grabación también
-    // (y la voz queda mejor: el timbre se saca de una muestra más larga).
-    const guion = ($('#recTexto') && $('#recTexto').textContent || '').trim();
-    const DUR = Math.max(30, Math.min(90, Math.round((guion.length || 600) / 12)));
-    const tic = ()=>{
-      an.getByteTimeDomainData(buf); let pk = 0; for(const v of buf) pk = Math.max(pk, Math.abs(v - 128));
-      $('#recLevel').style.width = Math.min(100, pk / 128 * 140) + '%';
-      const q = Math.max(0, DUR - Math.floor((Date.now() - t0) / 1000));
-      $('#recTime').textContent = `Grabando… ${q} s (toca «Terminar» si ya leíste todo)`;
-      if(q <= 0) terminar(); else raf = requestAnimationFrame(tic);
-    };
-    const terminar = ()=>{ if(rec.state !== 'inactive') rec.stop(); cancelAnimationFrame(raf); };
-    grabando = {terminar};
-    $('#recBtn').textContent = '■ Terminar';
-    rec.onstop = async ()=>{
-      stream.getTracks().forEach(t => t.stop()); grabando = null;
-      $('#recLive').hidden = true; $('#recBtn').textContent = 'Procesando…'; $('#recBtn').disabled = true;
-      try{
-        await guardarVoz(new Blob(partes, {type: rec.mimeType || 'audio/mp4'}), ctx);
-      }catch(e){ /* el aviso ya quedó en el panel */ }
-      finally{ try{ ctx.close(); }catch(e){} $('#recBtn').disabled = false;
-        $('#recBtn').textContent = store.get('vozSE') ? '● Grabar de nuevo' : '● Grabar mi voz'; actualizarMV(); }
-    };
-    rec.start(); tic();
+    aviso('Abriendo el micrófono…');
+    // si el micrófono no contesta (otra app lo está usando, o el navegador se trabó), no esperar para siempre
+    if(!GV.stream) GV.stream = await Promise.race([
+      navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1}}),
+      dormir(15000).then(() => { throw Object.assign(new Error('el micrófono no respondió'), {name: 'TimeoutError'}); })]);
+    aviso('');
   }catch(e){
-    stream.getTracks().forEach(t => t.stop());
-    avisoMiVoz('No pude empezar a grabar (' + ((e && e.message) || e) + '). Usa «Usar un audio grabado».', true);
+    aviso(e && e.name === 'NotAllowedError' ? 'El navegador no dio permiso para el micrófono. ' + ayudaMicrofono()
+      : e && (e.name === 'TimeoutError' || e.name === 'NotReadableError') ? 'El micrófono no respondió: puede que otra app lo esté usando (una llamada, un audio de WhatsApp). Ciérrala y toca Empezar otra vez.'
+      : 'No pude usar el micrófono. ' + ayudaMicrofono()); return;
   }
+  if(!GV.ctx){
+    GV.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    GV.an = GV.ctx.createAnalyser(); GV.an.fftSize = 1024;
+    GV.ctx.createMediaStreamSource(GV.stream).connect(GV.an);
+  }
+  GV.ctx.resume().catch(()=>{});
+  mostrarFrase();
+}
+// Graba una frase. Se detiene sola tras 1,2 s de silencio después de hablar (o con un toque, o a los 15 s).
+function grabarFrase(){
+  if(GV.grabando){ GV.rec && GV.rec.state !== 'inactive' && GV.rec.stop(); return; }
+  const texto = $('#guiaTexto').textContent, partes = [], rec = new MediaRecorder(GV.stream);
+  GV.rec = rec; GV.grabando = true;
+  rec.ondataavailable = e => { if(e.data.size) partes.push(e.data); };
+  const b = $('#guiaGrabar'); b.textContent = '■ Listo'; b.classList.add('on');
+  $('#guiaEstado').textContent = 'Lee la frase en voz alta…';
+  const buf = new Float32Array(GV.an.fftSize), t0 = performance.now();
+  let hablo = false, silencioDesde = 0;
+  const tic = ()=>{
+    if(!GV.grabando) return;
+    GV.an.getFloatTimeDomainData(buf);
+    let r = 0; for(const v of buf) r += v * v; r = Math.sqrt(r / buf.length);
+    $('#guiaNivel').style.width = Math.min(100, r * 900) + '%';
+    const ahora = performance.now();
+    if(r > 0.02){ hablo = true; silencioDesde = 0; }
+    else if(hablo){ if(!silencioDesde) silencioDesde = ahora; else if(ahora - silencioDesde > 1200) return rec.stop(); }
+    if(ahora - t0 > 15000 || (!hablo && ahora - t0 > 7000)) return rec.stop();
+    GV.raf = requestAnimationFrame(tic);
+  };
+  rec.onstop = async ()=>{
+    GV.grabando = false; cancelAnimationFrame(GV.raf);
+    b.textContent = '● Grabar'; b.classList.remove('on'); $('#guiaNivel').style.width = '0%';
+    if(!GV.abierta) return;
+    const blob = new Blob(partes, {type: rec.mimeType || 'audio/mp4'});
+    let pcm;
+    try{ pcm = await GV.ctx.decodeAudioData(await blob.arrayBuffer()); }
+    catch(e){ $('#guiaEstado').textContent = 'No pude leer la grabación. Toca ● Grabar para repetirla.'; return; }
+    const d = pcm.getChannelData(0);
+    let pico = 0, recortes = 0; for(const v of d){ const a = Math.abs(v); if(a > pico) pico = a; if(a > 0.99) recortes++; }
+    const voz = MV.M ? MV.M.recortar(d).length / pcm.sampleRate : pcm.duration;
+    if(pico < 0.03 || voz < 1.2){ $('#guiaEstado').textContent = 'No se escuchó bien: acércate un poco al teléfono y toca ● Grabar para repetirla.'; return; }
+    if(recortes > d.length * 0.01){ $('#guiaEstado').textContent = 'Se escuchó muy fuerte: aléjate un poco y toca ● Grabar para repetirla.'; return; }
+    $('#guiaEstado').textContent = '';
+    kv.put('voz', 'grabacion', blob).catch(()=>{});            // «Escuchar grabación» toca la última
+    GV.n++;
+    encolarAnalisis({texto, pcm: Float32Array.from(d), sr: pcm.sampleRate});
+    if(!GV.completo) mostrarFrase();
+  };
+  rec.start(); tic();
+}
+// Cada grabación: su huella se calcula al tiro (es rápida) y decide cuándo se llena la barra. La medida con
+// la voz clonada es lenta (en el teléfono, más que grabar una frase), así que se hace siempre con la grabación
+// más reciente y se saltan las que quedaron atrás: la barra va al día aunque grabes rápido.
+function encolarAnalisis(f){
+  GV.pend++; pintarSimilitud();
+  GV.cola = GV.cola.then(() => huellaFrase(f))
+    .catch(e => { diag('no se pudo analizar una frase: ' + (e && e.message || e)); $('#guiaEstado').textContent = 'No se pudo analizar una frase: ' + (e && e.message || e); })
+    .finally(() => { GV.pend--; medirUltima(); if(GV.abierta) pintarSimilitud(); });
+}
+async function huellaFrase({texto, pcm, sr}){
+  await cargarMotorGuia();
+  let a = MV.M.recortar(pcm);
+  let pico = 0; for(const v of a) pico = Math.max(pico, Math.abs(v));
+  if(pico > 0) a = a.map(v => v * 0.95 / pico);
+  const real = Float32Array.from(await MV.M.huellaDe(a, sr));
+  const antes = GV.emb.length ? promedioHuellas(GV.emb) : null;
+  GV.emb.push(real);
+  const tgt = promedioHuellas(GV.emb);
+  const cambio = antes ? MV.M.parecido(tgt, antes) : 0;
+  GV.estables = GV.emb.length >= 3 && cambio >= GUIA_ESTABLE ? GV.estables + 1 : 0;
+  GV.porMedir = {texto, real, i: GV.emb.length - 1};
+  diag(`grabación guiada: frase ${GV.emb.length} · cambio de la huella ${(1 - cambio).toFixed(5)}`);
+  // tu voz queda lista para leer desde ya (y mejora con cada frase)
+  store.set('vozSE', Array.from(tgt)); store.set('vozHash', Date.now().toString(36)); store.del('vozBase');
+  MV.pref = null; MV.cfg = null;
+  guardarGuia(); actualizarMV();
+  if(!GV.completo && ((GV.emb.length >= GUIA_MIN && GV.estables >= 2) || GV.emb.length >= GUIA_MAX)) completarGuia();
+}
+// La medida: la voz clonada (armada sin esa grabación) lee la misma frase y su huella se compara con la tuya.
+async function medirUltima(){
+  if(GV.midiendo || !GV.porMedir) return;
+  const m = GV.porMedir; GV.porMedir = null; GV.midiendo = m.i + 1;
+  if(GV.abierta) pintarSimilitud();
+  try{
+    const sin = GV.emb.length > 1 ? promedioHuellas(GV.emb.filter((_, k) => k !== m.i)) : GV.emb[0];
+    const base = await baseDesde(sin);
+    const crudo = MV.M.recortar(await MV.M.hablar(m.texto, 'es', base.id, 1));
+    const clon = await MV.M.convertir(crudo, base.se, sin);
+    const sim = MV.M.parecido(Float32Array.from(await MV.M.huellaDe(clon, MV.M.SR)), m.real);
+    GV.sims.push(sim); guardarGuia(); actualizarMV();
+    diag(`grabación guiada: similitud medida con la frase ${m.i + 1}: ${Math.round(sim * 100)}%`);
+  }catch(e){ diag('no se pudo medir la similitud: ' + (e && e.message || e)); }
+  finally{
+    GV.midiendo = 0;
+    if(GV.abierta){ pintarSimilitud(); if(GV.completo) pintarFin(); }
+    medirUltima();
+  }
+}
+function completarGuia(){
+  GV.completo = true; guardarGuia();
+  if(GV.rec && GV.rec.state !== 'inactive'){ GV.rec.onstop = null; GV.rec.stop(); GV.grabando = false; }
+  soltarMicGuia();
+  if(!GV.abierta) return;
+  pintarFin();
+  pantallaGuia('guiaFin');
+}
+function pintarFin(){
+  const s = simGuia();
+  $('#guiaFinVal').textContent = s == null ? '…' : Math.round(s * 100) + '%';
+  $('#guiaFinNota').textContent = (GV.midiendo || GV.porMedir ? 'Terminando de medir la última frase… ' : '') +
+    `Con ${GV.emb.length} frases grabadas. Ya puedes leer tus libros con tu voz en «Mi voz».`;
+}
+function soltarMicGuia(){
+  cancelAnimationFrame(GV.raf);
+  if(GV.stream){ GV.stream.getTracks().forEach(t => t.stop()); GV.stream = null; }
+  if(GV.ctx){ try{ GV.ctx.close(); }catch(e){} GV.ctx = null; GV.an = null; }
+}
+function cerrarGuia(){
+  GV.abierta = false;
+  if(GV.rec && GV.rec.state !== 'inactive'){ GV.rec.onstop = null; GV.rec.stop(); }
+  GV.grabando = false;
+  soltarMicGuia();
+  $('#guia').hidden = true;
+  actualizarMV();
+}
+$('#guiaEmpezar').onclick = ()=> empezarGuia(GV.completo);
+$('#guiaDeCero').onclick = ()=> empezarGuia(true);
+$('#guiaGrabar').onclick = grabarFrase;
+$('#guiaOtra').onclick = ()=>{ if(GV.grabando) return; GV.n++; mostrarFrase(); };
+$('#guiaTerminar').onclick = cerrarGuia;
+$('#guiaCerrar').onclick = cerrarGuia;
+$('#guiaListo').onclick = cerrarGuia;
+$('#guiaProbar').onclick = async ()=>{
+  const btn = $('#guiaProbar'); btn.disabled = true;
+  const prueba = new Audio(); prueba.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; prueba.play().catch(()=>{});
+  try{
+    $('#guiaFinNota').textContent = 'Preparando la prueba…';
+    await motorMV(()=>{});
+    const b = MV.base.es;
+    const a = await MV.M.convertir(MV.M.recortar(await MV.M.hablar('Hola. Así suena mi voz leyendo mis libros, con calma y sin apuro.', 'es', b.id, 1)), b.se, MV.tgt);
+    prueba.src = URL.createObjectURL(wav16(a)); prueba.playbackRate = rate; await prueba.play();
+    $('#guiaFinNota').textContent = '';
+  }catch(e){ $('#guiaFinNota').textContent = e.message || String(e); }
+  finally{ btn.disabled = false; }
 };
+
+$('#recBtn').onclick = ()=> abrirGuia();
 // Grabar con otra app (Notas de Voz) y elegir el archivo: funciona aunque el navegador no dé el micrófono.
 $('#recPick').onclick = ()=> $('#recFile').click();
 $('#recFile').onchange = async e => {
@@ -2289,7 +2531,7 @@ function updateVoiceBtn(){
 }
 // Versión del código que está corriendo: sirve para saber si el teléfono se quedó con una copia vieja
 // (tiene que coincidir con CACHE en sw.js; si no coincide, cierra la app y vuelve a abrirla con internet).
-const VERSION_APP = 'v44';
+const VERSION_APP = 'v45';
 function verVersion(){
   const el = $('#verApp'); if(!el) return;
   if(!self.caches){ el.textContent = 'Versión de la app: ' + VERSION_APP; return; }
