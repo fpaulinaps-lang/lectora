@@ -795,7 +795,42 @@ function pausaTras(i){
   return 0.18;                                                // frase larga partida: como una coma
 }
 
-function firmaMV(){ const b = store.get('vozBase'); return 'mv' + store.get('vozHash', '') + '-' + (b ? b.es.id + '.' + b.en.id : ''); }
+function firmaMV(){ const b = store.get('vozBase'); return 'mvp' + store.get('vozHash', '') + '-' + (b ? b.es.clave + '.' + b.en.clave : ''); }
+// Voces base de «Mi voz»: voces Piper que hablan español de verdad (las de Kokoro tenían acento inglés: el
+// conversor cambia el timbre, pero el acento y la entonación son los de la voz base). Se usa la más parecida
+// a tu huella; sus huellas se calcularon de antemano (voz/huellas-piper.json).
+const BASES_MV = {
+  es: [{id: 'es_MX-claude-high', ruta: 'es/es_MX/claude/high', sid: 0, nombre: 'Claude · México (mujer)', mb: 63, acento: 'latino'},
+       {id: 'es_MX-ald-medium', ruta: 'es/es_MX/ald/medium', sid: 0, nombre: 'Ald · México (hombre)', mb: 63, acento: 'latino'},
+       {id: 'es_ES-sharvard-medium', ruta: 'es/es_ES/sharvard/medium', sid: 1, nombre: 'Sharvard · España (mujer)', mb: 77, acento: 'espana'},
+       {id: 'es_ES-sharvard-medium', ruta: 'es/es_ES/sharvard/medium', sid: 0, nombre: 'Sharvard · España (hombre)', mb: 77, acento: 'espana'}],
+  en: [{id: 'en_US-amy-medium', ruta: 'en/en_US/amy/medium', sid: 0, nombre: 'Amy · EE. UU.', mb: 63},
+       {id: 'en_US-lessac-medium', ruta: 'en/en_US/lessac/medium', sid: 0, nombre: 'Lessac · EE. UU.', mb: 63}],
+};
+BASES_MV.es.concat(BASES_MV.en).forEach(b => b.clave = b.id + (b.sid ? '#' + b.sid : ''));
+let huellasPiper = null;
+async function basesMasParecidas(tgt){
+  if(!huellasPiper) huellasPiper = await (await fetch('voz/huellas-piper.json')).json();
+  const base = {};
+  for(const l of ['es', 'en']){
+    let mejor = null;
+    // el acento lo pone la voz base (el conversor solo cambia el timbre): por defecto, latinoamericano
+    const acento = store.get('mvAcento', 'latino');
+    for(const b of BASES_MV[l].filter(b => l === 'en' || b.acento === acento)){
+      const se = Float32Array.from(huellasPiper[b.clave]), sim = MV.M.parecido(se, tgt);
+      if(!mejor || sim > mejor.sim) mejor = {...b, se, sim};
+    }
+    base[l] = mejor;
+  }
+  return base;
+}
+// La voz base lee el texto (Piper, en el proceso de la voz natural) y queda a 24 kHz, lista para el conversor.
+async function hablarBaseMV(texto, l, b, avance){
+  const idioma = l === 'en' ? 'en' : 'es';
+  await cargarModeloNA(b, idioma, 0, avance);
+  const a = recortarNA(await llamarNA('hablar', [b.id, texto, 1, undefined, b.sid], [], 0));
+  return MV.M.remuestrear(Float32Array.from(a), NA.sr, MV.M.SR);
+}
 const claveMV = i => `${doc.key}|${firmaMV()}|${i}`;
 async function discoMV(){
   const pref = `${doc.key}|${firmaMV()}|`;
@@ -809,7 +844,7 @@ async function discoMV(){
 const frasesDePagina = p => { const a = pageStarts[p], b = p + 1 < pageStarts.length ? pageStarts[p + 1] : flat.length; return Array.from({length: b - a}, (_, k) => a + k); };
 const paginaLista = p => { const f = frasesDePagina(p); return f.length > 0 && f.every(i => listaMV(i)); };
 
-// Carga el motor (la primera vez descarga unos 180 MB) y elige la voz natural más parecida a la tuya.
+// Carga el conversor de timbre (la primera vez ~66 MB, más la voz base de Piper) y elige la voz base más parecida a la tuya.
 async function motorMV(avance = ()=>{}){
   await motorBaseMV(avance);
   await elegirBase();
@@ -824,31 +859,20 @@ async function motorBaseMV(avance = ()=>{}){
     try{ gpu = !store.get('sinGPU', false) && !!(navigator.gpu && await navigator.gpu.requestAdapter()); }catch(e){}
     MV.M.configurar({gpu});
   }
-  await MV.M.prepararVoz(avance);
-  await MV.M.prepararConversor(avance);
+  await MV.M.prepararConversor(avance);              // la voz base es Piper: Kokoro ya no se baja ni se carga
 }
 async function elegirBase(){
   const h = store.get('vozSE'); if(!h) throw new Error('Primero graba tu voz.');
   MV.tgt = Float32Array.from(h);
   const g = store.get('vozBase');
-  if(g && g.hash === store.get('vozHash')){
-    MV.base = {es: {id: g.es.id, se: Float32Array.from(g.es.se)}, en: {id: g.en.id, se: Float32Array.from(g.en.se)}};
-    return;
+  if(g && g.hash === store.get('vozHash') && g.es.clave && g.acento === store.get('mvAcento', 'latino')){
+    const de = x => ({...BASES_MV[x.l].find(b => b.clave === x.clave), se: Float32Array.from(x.se)});
+    MV.base = {es: de({...g.es, l: 'es'}), en: de({...g.en, l: 'en'})};
+    if(MV.base.es.id && MV.base.en.id) return;
   }
-  // huellas de las voces naturales calculadas de antemano: elegir es solo comparar números
-  const huellas = await (await fetch('voz/huellas-base.json')).json();
-  const cands = {es: ['ef_dora', 'em_alex'], en: ['af_heart', 'af_bella', 'am_michael', 'am_fenrir']};
-  const base = {};
-  for(const lang of ['es', 'en']){
-    let mejor = null;
-    for(const id of cands[lang]){
-      const se = Float32Array.from(huellas[id]), sim = MV.M.parecido(se, MV.tgt);
-      if(!mejor || sim > mejor.sim) mejor = {id, se, sim};
-    }
-    base[lang] = mejor;
-  }
-  MV.base = base;
-  store.set('vozBase', {hash: store.get('vozHash'), es: {id: base.es.id, se: Array.from(base.es.se)}, en: {id: base.en.id, se: Array.from(base.en.se)}});
+  MV.base = await basesMasParecidas(MV.tgt);
+  store.set('vozBase', {hash: store.get('vozHash'), acento: store.get('mvAcento', 'latino'), es: {clave: MV.base.es.clave, se: Array.from(MV.base.es.se)}, en: {clave: MV.base.en.clave, se: Array.from(MV.base.en.se)}});
+  diag(`«Mi voz»: voz base ${MV.base.es.nombre} (parecido ${Math.round(MV.base.es.sim * 100)}%) y ${MV.base.en.nombre} en inglés`);
   MV.pref = null;
 }
 function avanceMV(msg, n, t){
@@ -860,9 +884,12 @@ async function precalentarMV(){
   if(!store.get('vozSE')) return;
   try{
     if(!MV.M) MV.M = await import('./voz/motor.js');
-    if(await MV.M.modelosGuardados(true)){
-      await motorMV(()=>{});           // la voz base lista; los procesos de más se abren al tocar «Leer»
-                                       // (abrirlos al abrir el libro gastaba memoria y batería sin estar leyendo)
+    if(await MV.M.modelosGuardados(true, true)){
+      await motorMV(()=>{});
+      // sin Kokoro alcanza la memoria para dejar abiertos los 2 procesos de timbre y cargada la voz base:
+      // así «Leer» no hace una pausa en la segunda frase mientras se abren
+      await asegurarCfgMV();
+      cargarModeloNA(MV.base.es, 'es', 0, ()=>{}).catch(()=>{});
     }
   }catch(e){}
 }
@@ -1051,11 +1078,16 @@ async function bajarNA(url, avance){
   return (await c.match(url)).arrayBuffer();
 }
 function cargarVozNA(l, k = 0){
-  const idioma = l === 'en' ? 'en' : 'es', v = vozNA(idioma), clave = k + '|' + idioma;
+  const idioma = l === 'en' ? 'en' : 'es';
+  return cargarModeloNA(vozNA(idioma), idioma, k);
+}
+// Una voz de Piper por idioma en el proceso: cargar otra del mismo idioma suelta la anterior.
+function cargarModeloNA(v, idioma, k = 0, avanceExtra){
+  const clave = k + '|' + idioma;
   // otra voz del mismo idioma: el proceso suelta la anterior al cargar esta
   if(NA.cargadas.has(clave) && NA.cargadas.get(clave).id !== v.id) NA.cargadas.delete(clave);
   if(!NA.cargadas.has(clave)) NA.cargadas.set(clave, (async ()=>{
-    const avance = (n, t) => showStatus(`Bajando la voz ${v.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || v.mb * 1e6) / 1e6)} MB (solo la primera vez; usa Wi-Fi).`, null, t ? n / t : null);
+    const avance = avanceExtra || ((n, t) => showStatus(`Bajando la voz ${v.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || v.mb * 1e6) / 1e6)} MB (solo la primera vez; usa Wi-Fi).`, null, t ? n / t : null));
     const [modelo, config] = await Promise.all([bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx', avance), bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx.json', ()=>{})]);
     NA.sr = await llamarNA('cargar', [v.id, modelo, config, idioma], [modelo, config], k);
     if(!$('#statusProg').hidden) hideStatus();
@@ -1343,7 +1375,8 @@ async function asegurarCfgMV(){
   if(!MV.cfg){
     MV.cfg = (async ()=>{
       await motorMV(avanceMV);
-      const conf = MV.M.usaGPU() ? [1, 1] : (store.get('mvProcesos', null) || [1, 1]);
+      // sin Kokoro queda memoria para 2 procesos de timbre (con 1 solo, el timbre no alcanza el ritmo de la lectura)
+      const conf = MV.M.usaGPU() ? [1, 1] : [1, Math.max(2, (store.get('mvProcesos', null) || [1, 2])[1])];
       // Abrir los procesos de más se hace de fondo: si se esperara, la primera frase tardaría varios
       // segundos más (cada proceso extra carga sus modelos). La frase 1 ya sale con los que hay.
       // Si hay una pre-generación en curso, ella manda: es la que está midiendo cuántos procesos convienen.
@@ -1362,13 +1395,16 @@ function asegurarFraseMV(i){
   if(listaMV(i)) return Promise.resolve();
   const ya = MV.enCurso.get(i);
   if(ya) return ya;
-  const d = doc, pref = firmaMV(), clave = claveMV(i);
+  const d = doc;
   const p = (async ()=>{
     await asegurarCfgMV();
-    if(doc !== d || firmaMV() !== pref) return null;    // cambió el libro o la voz: ya no sirve
+    // la firma se toma después de elegir la voz base: justo después de grabar tu voz, esa elección cambia la
+    // firma y antes las primeras frases se descartaban (y la lectura esperaba a que se hicieran otra vez)
+    if(doc !== d) return null;
+    const pref = firmaMV(), clave = claveMV(i);
     if(!MV.base) throw new Error('Primero graba tu voz.');
     const s = flat[i], b = MV.base[s.l] || MV.base.es;
-    const crudo = MV.M.recortar(await MV.M.hablar(s.t, s.l, b.id, 1));
+    const crudo = await hablarBaseMV(textoNA(s), s.l, b);
     const a = await MV.M.convertir(crudo, b.se, MV.tgt);
     if(doc !== d || firmaMV() !== pref) return null;
     MV.mem.set(i, a);                                   // lista para sonar ya mismo
@@ -1782,8 +1818,11 @@ async function playST(){
       NA.limite = Infinity;
       await discoNA();
       if(!NA.hechas.has(i)) showStatus('Preparando la voz…');
-    } else if(esMiVoz() && !fuenteMV.lista(i)){
-      showStatus('Iniciando tu voz…');
+    } else if(esMiVoz()){
+      if(!fuenteMV.lista(i)) showStatus('Iniciando tu voz…');
+      // empezar con dos frases listas: mientras suena la primera se abre el segundo proceso de timbre, y sin
+      // este margen la lectura hacía una pausa justo después de la primera frase
+      if(i + 1 < flat.length && !fuenteMV.lista(i + 1)) await Promise.race([asegurarFraseMV(i + 1).catch(()=>{}), dormir(10000)]);
     }
     await abrirST(i);
     if(yo !== MV.turno || !playing) return;
@@ -2043,7 +2082,7 @@ async function guardarVoz(blob, ctx){
 // Cada grabación aporta su huella de voz; tu voz es el promedio de todas. Después de cada frase se mide:
 // la voz clonada lee esa misma frase (armada SIN esa grabación, para que la medida sea honesta) y se compara
 // su huella con la de tu grabación real. La barra se llena cuando grabar más ya no cambia tu huella
-// (dos frases seguidas casi sin cambio): desde ahí la similitud ya no puede mejorar con más frases.
+// (dos frases seguidas con un cambio menor a 0,001): desde ahí la similitud ya no puede mejorar con más frases.
 const FRASES_VOZ = [
   'El sol de la mañana entraba despacio por la ventana de la cocina.',
   '¿Quién dejó las llaves encima de la mesa del comedor?',
@@ -2066,7 +2105,7 @@ const FRASES_VOZ = [
   'La profesora explicó la lección con paciencia y buen humor.',
   'Siempre que viajo llevo un cuaderno para anotar lo que veo.',
 ];
-const GUIA_MIN = 5, GUIA_MAX = 20, GUIA_ESTABLE = 0.9995;
+const GUIA_MIN = 5, GUIA_MAX = 16, GUIA_ESTABLE = 0.999;
 const GV = {abierta: false, stream: null, ctx: null, an: null, rec: null, raf: 0, n: 0, emb: [], sims: [], estables: 0,
             completo: false, cola: Promise.resolve(), pend: 0, motor: null, huellas: null, grabando: false, midiendo: 0, porMedir: null};
 
@@ -2097,15 +2136,7 @@ function cargarMotorGuia(){
   }
   return GV.motor;
 }
-async function baseDesde(tgt){
-  if(!GV.huellas) GV.huellas = await (await fetch('voz/huellas-base.json')).json();
-  let mejor = null;
-  for(const id of ['ef_dora', 'em_alex']){
-    const se = Float32Array.from(GV.huellas[id]), sim = MV.M.parecido(se, tgt);
-    if(!mejor || sim > mejor.sim) mejor = {id, se, sim};
-  }
-  return mejor;
-}
+async function baseDesde(tgt){ return (await basesMasParecidas(tgt)).es; }
 
 function pantallaGuia(cual){
   for(const id of ['guiaIntro', 'guiaFrase', 'guiaFin']) $('#' + id).hidden = id !== cual;
@@ -2120,7 +2151,7 @@ function pintarSimilitud(){
   else if(GV.midiendo) nota = `Midiendo la similitud con la frase ${GV.midiendo}… puedes seguir grabando.`;
   else if(GV.pend) nota = 'Analizando lo que grabaste…';
   else if(!GV.sims.length) nota = 'Graba la primera frase para medirla.';
-  else if(GV.emb.length < GUIA_MIN) nota = `Faltan al menos ${GUIA_MIN - GV.emb.length} frases para afinar tu voz.`;
+  else if(GV.emb.length < GUIA_MIN){ const f = GUIA_MIN - GV.emb.length; nota = `Falta${f === 1 ? '' : 'n'} al menos ${f} frase${f === 1 ? '' : 's'} para afinar tu voz.`; }
   else nota = GV.estables ? 'Casi: tu voz ya casi no cambia con más frases.' : 'Cada frase afina tu voz. Sigue grabando.';
   $('#guiaSimNota').textContent = nota;
 }
@@ -2191,7 +2222,7 @@ function grabarFrase(){
     $('#guiaNivel').style.width = Math.min(100, r * 900) + '%';
     const ahora = performance.now();
     if(r > 0.02){ hablo = true; silencioDesde = 0; }
-    else if(hablo){ if(!silencioDesde) silencioDesde = ahora; else if(ahora - silencioDesde > 1200) return rec.stop(); }
+    else if(hablo){ if(!silencioDesde) silencioDesde = ahora; else if(ahora - silencioDesde > 900) return rec.stop(); }
     if(ahora - t0 > 15000 || (!hablo && ahora - t0 > 7000)) return rec.stop();
     GV.raf = requestAnimationFrame(tic);
   };
@@ -2199,20 +2230,21 @@ function grabarFrase(){
     GV.grabando = false; cancelAnimationFrame(GV.raf);
     b.textContent = '● Grabar'; b.classList.remove('on'); $('#guiaNivel').style.width = '0%';
     if(!GV.abierta) return;
+    const nFrase = GV.n + 1;
+    GV.n++;
+    if(!GV.completo) mostrarFrase();                         // sin esperar: la revisión sigue por detrás
     const blob = new Blob(partes, {type: rec.mimeType || 'audio/mp4'});
+    const malo = msg => { $('#guiaEstado').textContent = `La frase ${nFrase} no se usó: ${msg}`; };
     let pcm;
     try{ pcm = await GV.ctx.decodeAudioData(await blob.arrayBuffer()); }
-    catch(e){ $('#guiaEstado').textContent = 'No pude leer la grabación. Toca ● Grabar para repetirla.'; return; }
+    catch(e){ malo('no pude leer la grabación.'); return; }
     const d = pcm.getChannelData(0);
     let pico = 0, recortes = 0; for(const v of d){ const a = Math.abs(v); if(a > pico) pico = a; if(a > 0.99) recortes++; }
     const voz = MV.M ? MV.M.recortar(d).length / pcm.sampleRate : pcm.duration;
-    if(pico < 0.03 || voz < 1.2){ $('#guiaEstado').textContent = 'No se escuchó bien: acércate un poco al teléfono y toca ● Grabar para repetirla.'; return; }
-    if(recortes > d.length * 0.01){ $('#guiaEstado').textContent = 'Se escuchó muy fuerte: aléjate un poco y toca ● Grabar para repetirla.'; return; }
-    $('#guiaEstado').textContent = '';
+    if(pico < 0.03 || voz < 1.2){ malo('no se escuchó bien (acércate un poco al teléfono).'); return; }
+    if(recortes > d.length * 0.01){ malo('se escuchó muy fuerte (aléjate un poco).'); return; }
     kv.put('voz', 'grabacion', blob).catch(()=>{});            // «Escuchar grabación» toca la última
-    GV.n++;
     encolarAnalisis({texto, pcm: Float32Array.from(d), sr: pcm.sampleRate});
-    if(!GV.completo) mostrarFrase();
   };
   rec.start(); tic();
 }
@@ -2247,12 +2279,13 @@ async function huellaFrase({texto, pcm, sr}){
 // La medida: la voz clonada (armada sin esa grabación) lee la misma frase y su huella se compara con la tuya.
 async function medirUltima(){
   if(GV.midiendo || !GV.porMedir) return;
+  if(GV.grabando){ clearTimeout(GV.medirT); GV.medirT = setTimeout(medirUltima, 400); return; }
   const m = GV.porMedir; GV.porMedir = null; GV.midiendo = m.i + 1;
   if(GV.abierta) pintarSimilitud();
   try{
     const sin = GV.emb.length > 1 ? promedioHuellas(GV.emb.filter((_, k) => k !== m.i)) : GV.emb[0];
     const base = await baseDesde(sin);
-    const crudo = MV.M.recortar(await MV.M.hablar(m.texto, 'es', base.id, 1));
+    const crudo = await hablarBaseMV(m.texto, 'es', base, (n, t) => { $('#guiaDescarga').textContent = `Bajando la voz base ${base.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || base.mb * 1e6) / 1e6)} MB`; });
     const clon = await MV.M.convertir(crudo, base.se, sin);
     const sim = MV.M.parecido(Float32Array.from(await MV.M.huellaDe(clon, MV.M.SR)), m.real);
     GV.sims.push(sim); guardarGuia(); actualizarMV();
@@ -2305,7 +2338,7 @@ $('#guiaProbar').onclick = async ()=>{
     $('#guiaFinNota').textContent = 'Preparando la prueba…';
     await motorMV(()=>{});
     const b = MV.base.es;
-    const a = await MV.M.convertir(MV.M.recortar(await MV.M.hablar('Hola. Así suena mi voz leyendo mis libros, con calma y sin apuro.', 'es', b.id, 1)), b.se, MV.tgt);
+    const a = await MV.M.convertir(await hablarBaseMV('Hola. Así suena mi voz leyendo mis libros, con calma y sin apuro.', 'es', b), b.se, MV.tgt);
     prueba.src = URL.createObjectURL(wav16(a)); prueba.playbackRate = rate; await prueba.play();
     $('#guiaFinNota').textContent = '';
   }catch(e){ $('#guiaFinNota').textContent = e.message || String(e); }
@@ -2313,6 +2346,13 @@ $('#guiaProbar').onclick = async ()=>{
 };
 
 $('#recBtn').onclick = ()=> abrirGuia();
+$('#mvAcento').value = store.get('mvAcento', 'latino');
+$('#mvAcento').onchange = e => {
+  if(playing && esMiVoz()) stop();
+  store.set('mvAcento', e.target.value); store.del('vozBase');
+  MV.base = null; MV.cfg = null; MV.pref = null; olvidarBloques();
+  diag('acento de «Mi voz»: ' + (e.target.value === 'espana' ? 'España' : 'latinoamericano'));
+};
 // Grabar con otra app (Notas de Voz) y elegir el archivo: funciona aunque el navegador no dé el micrófono.
 $('#recPick').onclick = ()=> $('#recFile').click();
 $('#recFile').onchange = async e => {
@@ -2334,7 +2374,7 @@ $('#mvTest').onclick = async ()=>{
     $('#mvTestNote').textContent = 'Preparando la prueba (la primera vez descarga la voz)…';
     await motorMV(avanceMV); $('#mvDescarga').textContent = '';
     const b = MV.base.es;
-    const a = await MV.M.convertir(MV.M.recortar(await MV.M.hablar('Hola. Así suena mi voz leyendo mis libros, con calma y sin apuro.', 'es', b.id, 1)), b.se, MV.tgt);
+    const a = await MV.M.convertir(await hablarBaseMV('Hola. Así suena mi voz leyendo mis libros, con calma y sin apuro.', 'es', b), b.se, MV.tgt);
     prueba.src = URL.createObjectURL(wav16(a)); prueba.playbackRate = rate; await prueba.play();
     $('#mvTestNote').textContent = '';
   }catch(e){ $('#mvTestNote').textContent = e.message || String(e); }
@@ -2349,7 +2389,7 @@ function setModo(m){
     if(m === 'natural') setTimeout(() => precalentarNA(), 0);
     if(m === 'mivoz') setTimeout(() => precalentarMV(), 0);
   }
-  if(m !== 'natural') soltarNA();
+  if(m === 'telefono') soltarNA();
   modo = m; store.set('modo', m);
   document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.modo === m ? 'true' : 'false'));
   document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== m);
@@ -2531,7 +2571,7 @@ function updateVoiceBtn(){
 }
 // Versión del código que está corriendo: sirve para saber si el teléfono se quedó con una copia vieja
 // (tiene que coincidir con CACHE en sw.js; si no coincide, cierra la app y vuelve a abrirla con internet).
-const VERSION_APP = 'v45';
+const VERSION_APP = 'v46';
 function verVersion(){
   const el = $('#verApp'); if(!el) return;
   if(!self.caches){ el.textContent = 'Versión de la app: ' + VERSION_APP; return; }

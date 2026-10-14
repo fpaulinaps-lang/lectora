@@ -266,13 +266,15 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       </div>
 
       <div class="panel" data-panel="mivoz" hidden>
-        <p class="hint">Lee tus libros con tu voz usando clonación por inteligencia artificial. Una vez grabada tu voz, <b>puedes tocar «Leer» (▶) directamente</b>: la lectura comienza al vuelo y el teléfono genera las siguientes frases en segundo plano mientras escuchas. La primera vez descarga el motor (~180 MB por única vez; usa Wi-Fi).</p>
+        <p class="hint">Lee tus libros con tu voz usando clonación por inteligencia artificial. Una vez grabada tu voz, <b>puedes tocar «Leer» (▶) directamente</b>: la lectura comienza al vuelo y el teléfono genera las siguientes frases en segundo plano mientras escuchas. La primera vez descarga el motor (unos 140 MB por única vez; usa Wi-Fi). La voz base habla español nativo y el motor le pone tu timbre.</p>
         <div id="recEmpty" class="panel">
           <p class="hint">Toca «Grabar mi voz»: leerás frases cortas, una por una, y después de cada una verás cuánto se parece tu voz clonada a la tuya. Si prefieres grabar con Notas de Voz, lee este texto:</p>
           <p class="script" id="recTexto">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención, y por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden solas. Cuando leo en voz alta escucho mejor lo que digo: las palabras pesan distinto y aparecen matices que la lectura silenciosa esconde. Por eso leo despacio, marcando bien cada sonido: la jota de jarra, la erre de carretera, la eñe de años, la zeta de zapato y la lluvia suave sobre la ventana. Hoy voy a leer varios documentos importantes, página por página, hasta terminarlos.</p>
         </div>
         <p class="note" id="recDone" hidden>Tu voz está grabada. La lectura se parece a ti en el tono; no copia exactamente tu acento ni tu manera de hablar.</p>
         <p class="hint" id="recSim" hidden></p>
+        <div class="field"><label for="mvAcento">Acento de la lectura</label>
+          <select id="mvAcento"><option value="latino">Latinoamericano (voz base de México)</option><option value="espana">De España</option></select></div>
         <div id="recLive" class="panel" hidden>
           <div class="meter"><i id="recLevel"></i></div>
           <p class="hint" id="recTime"></p>
@@ -337,7 +339,7 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
         <li>Después de cada frase, LectorLibre la lee con tu voz clonada y la compara con la tuya: <b>la barra muestra cuánto se parecen</b>.</li>
         <li>Sigue hasta que <b>la barra se llene</b>: ahí tu voz ya no mejora con más frases (suelen ser entre 6 y 12, unos 3 minutos).</li>
       </ol>
-      <p class="hint" id="guiaDescarga">La primera vez se baja el motor de voz (unos 180 MB): usa Wi-Fi.</p>
+      <p class="hint" id="guiaDescarga">La primera vez se baja el motor de voz (unos 140 MB): usa Wi-Fi.</p>
       <p class="hint guia-aviso" id="guiaAviso" hidden></p>
       <div class="guia-botones">
         <button class="btn rec" id="guiaEmpezar">Empezar</button>

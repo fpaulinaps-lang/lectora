@@ -55,7 +55,8 @@ const api = {
     return true;
   },
   // largo > 1 habla más lento (1,0 = normal); ruido = variación de la entonación
-  async hablar(id, texto, largo = 1, ruido){
+  // sid: hablante dentro de un modelo de varias voces (sharvard: 0 = hombre, 1 = mujer)
+  async hablar(id, texto, largo = 1, ruido, sid = 0){
     const v = voces[id];
     if(!v) throw new Error('voz no cargada');
     const inf = v.cfg.inference || {};
@@ -66,7 +67,7 @@ const api = {
       input_lengths: new ort.Tensor('int64', BigInt64Array.from([BigInt(ids.length)]), [1]),
       scales: new ort.Tensor('float32', new Float32Array([ruido ?? inf.noise_scale ?? 0.667, (inf.length_scale ?? 1) * largo, inf.noise_w ?? 0.8]), [3]),
     };
-    if(v.cfg.num_speakers > 1) feeds.sid = new ort.Tensor('int64', BigInt64Array.from([0n]), [1]);
+    if(v.cfg.num_speakers > 1) feeds.sid = new ort.Tensor('int64', BigInt64Array.from([BigInt(sid || 0)]), [1]);
     const r = await v.ses.run(feeds);
     return Float32Array.from(r.output.data);
   },

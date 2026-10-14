@@ -24,10 +24,11 @@ export const usaGPU = () => GPU;
 const modeloKokoro = () => HF + 'onnx/' + (GPU ? 'model.onnx' : 'model_quantized.onnx');
 export const tamanoVoz = () => GPU ? 326 : 92;   // MB que se descargan la primera vez
 // ¿Está todo descargado? Sirve para precalentar al abrir la app sin gastar datos.
-export async function modelosGuardados(conConversor){
+// ¿Ya están en el teléfono? («Mi voz» ya no usa Kokoro: con soloConversor basta el conversor de timbre.)
+export async function modelosGuardados(conConversor, soloConversor = false){
   try{
     const c = await caches.open(CACHE);
-    const urls = [modeloKokoro(), HF + 'tokenizer.json'];
+    const urls = soloConversor ? [] : [modeloKokoro(), HF + 'tokenizer.json'];
     if(conConversor){ const base = new URL('./', import.meta.url).href; for(const p of ['conv_a', 'conv_b', 'conv_c']) urls.push(base + p + '.onnx', base + p + '.f16'); }
     for(const u of urls) if(!(await c.match(u))) return false;
     return true;
@@ -225,32 +226,27 @@ export async function hablar(texto, lang, vozId, velocidad = 1){
 }
 function unir(ts){ const n = ts.reduce((a, t) => a + t.length, 0); const o = new Float32Array(n); let k = 0; for(const t of ts){ o.set(t, k); k += t.length; } return o; }
 
-/* ---------- más procesos para preparar más rápido (solo sin tarjeta gráfica) ---------- */
-// Un proceso de un hilo por núcleo: con 2 de voz natural y 2 de timbre se prepara cerca del doble de rápido
-// que con 1 y 1. Cada proceso carga sus propios modelos (unos 200 MB de memoria cada uno).
+/* ---------- más procesos de timbre (solo sin tarjeta gráfica) ---------- */
+// «Mi voz» ya no usa Kokoro: la voz base es Piper (español nativo, en su propio proceso), así que aquí solo se
+// reparten los procesos que le ponen tu timbre. Cada uno carga el conversor (~150 MB de memoria).
+// (nVoz se ignora: queda por compatibilidad con quien pide [voz, timbre].)
 export async function ampliar(nVoz, nTimbre){
   const pr = await procesos();
   if(pr.gpu) return {voz: 1, timbre: 1};
-  await prepararVoz(); await prepararConversor();
+  await prepararConversor();
   pr.convs = pr.convs || [pr.conv];
-  while(pr.voz.filter(x => x.kokoro).length < nVoz){
-    const q = crearProceso(new URL('./voz-worker-cpu.js', import.meta.url)); await q.listo; pr.todos.push(q);
-    await cargarKokoroEn(q, ()=>{}); pr.voz.push(q);
-  }
   while(pr.convs.length < nTimbre){
     const q = crearProceso(new URL('./voz-worker-cpu.js', import.meta.url)); await q.listo; pr.todos.push(q);
     await cargarConvEn(q); pr.convs.push(q);
   }
-  return {voz: pr.voz.filter(x => x.kokoro).length, timbre: pr.convs.length};
+  return {voz: 1, timbre: pr.convs.length};
 }
-// Deja exactamente nVoz procesos de voz natural y nTimbre de timbre (cierra los que sobran; llamar sin trabajo pendiente).
+// Deja exactamente nTimbre procesos de timbre (cierra los que sobran; llamar sin trabajo pendiente).
 export async function ajustar(nVoz, nTimbre){
   const pr = await procesos();
   if(pr.gpu) return {voz: 1, timbre: 1};
   pr.convs = pr.convs || [pr.conv];
-  const cerrar = q => { q.terminar(); pr.todos = pr.todos.filter(x => x !== q); };
-  while(pr.voz.length > Math.max(1, nVoz)){ const q = pr.voz.pop(); if(!pr.convs.includes(q)) cerrar(q); else q.kokoro = false; }
-  while(pr.convs.length > Math.max(1, nTimbre)){ const q = pr.convs.pop(); if(!pr.voz.includes(q) && q !== pr.conv) cerrar(q); }
+  while(pr.convs.length > Math.max(1, nTimbre)){ const q = pr.convs.pop(); if(q !== pr.conv){ q.terminar(); pr.todos = pr.todos.filter(x => x !== q); } }
   return ampliar(nVoz, nTimbre);
 }
 
