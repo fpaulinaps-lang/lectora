@@ -44,6 +44,13 @@ const store = {
   del(k){ try{ localStorage.removeItem('lectora:'+k); }catch(e){} }
 };
 
+/* ---------- Plataforma (iPhone, Android, Windows…) ---------- */
+// La app es para iPhone, Android y Windows: los pasos que se explican (permisos, voces, grabadora) cambian.
+const PLAT = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'ios'
+  : /Android/i.test(navigator.userAgent) ? 'android' : /Windows/i.test(navigator.userAgent) ? 'windows' : /Mac/i.test(navigator.platform) ? 'mac' : 'otro';
+const GRABADORA = {ios: 'Notas de Voz', android: 'la Grabadora del teléfono', windows: 'la Grabadora de sonido de Windows', mac: 'Notas de Voz'}[PLAT] || 'una app de grabación';
+const SISTEMA = {ios: 'el iPhone', android: 'el teléfono', windows: 'Windows', mac: 'el Mac'}[PLAT] || 'el sistema';
+
 /* ---------- Diagnóstico ---------- */
 // Lo que pasa mientras se escucha fuera de la app (no se puede ver de otra forma en el iPhone). Se muestra
 // en «Voz» › Diagnóstico, para mandar una captura si algo falla. Solo queda en este teléfono.
@@ -54,7 +61,7 @@ function diag(msg){
   store.set('diag', l);
 }
 // si al abrir la app seguía marcada «leyendo», el iPhone la cerró mientras sonaba
-if(store.get('sonando')){ diag('⚠ La app se cerró mientras leía (la cerró el iPhone por memoria o procesador, o la cerraste tú)'); store.set('sonando', false); }
+if(store.get('sonando')){ diag(`⚠ La app se cerró mientras leía (la cerró ${SISTEMA} por memoria o procesador, o la cerraste tú)`); store.set('sonando', false); }
 
 /* ---------- IndexedDB: libros, audios del Mac, voz ya generada y tu grabación ---------- */
 let dbp = null;
@@ -697,7 +704,10 @@ function fillVoices(){
   }
   const missing = ['es','en'].filter(l=>!voices.some(v=>v.lang.toLowerCase().startsWith(l) && isGood(v)));
   $('#voiceNote').textContent = missing.length
-    ? `Para que suenen mejor, descarga voces «Mejorada» o «Premium» en ${missing.map(l=>l==='es'?'español':'inglés').join(' y ')}: en iPhone, Ajustes › Accesibilidad › Contenido leído › Voces.` : '';
+    ? `Para que suenen mejor, instala voces de mejor calidad en ${missing.map(l=>l==='es'?'español':'inglés').join(' y ')}: ` + ({
+        ios: 'en Ajustes › Accesibilidad › Contenido leído › Voces, elige una que diga «Mejorada» o «Premium».',
+        android: 'en Ajustes › Sistema › Idiomas › Salida de texto a voz, elige Google e instala el idioma.',
+        windows: 'en Configuración › Hora e idioma › Voz › Agregar voces (y usa Edge, que trae voces «Natural»).'}[PLAT] || 'en la configuración de voz del sistema.') : '';
 }
 if(synth){ loadVoices(); synth.addEventListener ? synth.addEventListener('voiceschanged', loadVoices) : (synth.onvoiceschanged = loadVoices); }
 for(const lang of ['es','en']){
@@ -2041,7 +2051,7 @@ function reintentar(){
   MV.reintento = setTimeout(reintentar, sesionInterrumpida() ? 3000 : 1500);
 }
 try{ navigator.audioSession && navigator.audioSession.addEventListener('statechange', ()=>{
-  if(playing || MV.interrumpido) diag('sesión de audio del iPhone: ' + estadoSesion());
+  if(playing || MV.interrumpido) diag(`sesión de audio de ${SISTEMA}: ` + estadoSesion());
   if(sesionInterrumpida()) MV.ultimaInterrupcion = Date.now();
   else if(MV.interrumpido) reintentar();
 }); }catch(e){}
@@ -2387,7 +2397,7 @@ function cerrarGuia(){
 $('#guiaEmpezar').onclick = ()=> empezarGuia(GV.completo);
 $('#guiaDeCero').onclick = ()=> empezarGuia(true);
 $('#guiaGrabar').onclick = grabarFrase;
-$('#guiaOtra').onclick = ()=>{ if(GV.grabando) return; GV.n++; mostrarFrase(); };
+$('#guiaOtra').onclick = ()=>{ if(GV.grabando) return; if(GV.modo === 'entrenar') GV.iEnt = (GV.iEnt || 0) + 1; else GV.n++; mostrarFrase(); };
 $('#guiaTerminar').onclick = cerrarGuia;
 $('#guiaCerrar').onclick = cerrarGuia;
 $('#guiaListo').onclick = cerrarGuia;
@@ -2550,6 +2560,8 @@ $('#entExportar').onclick = exportarEnt;
 $('#entUsar').onclick = ()=> $('#entArchivos').click();
 $('#entArchivos').onchange = e => { const f = e.target.files; if(f && f.length) usarVozEntrenada(f).catch(err => $('#entNota').textContent = err.message || String(err)); e.target.value = ''; };
 $('#mvAcento').value = store.get('mvAcento', 'latino');
+$('#mvArranque').checked = arranqueMV();
+$('#mvArranque').onchange = e => store.set('mvArranque', e.target.checked);
 $('#mvAcento').onchange = e => {
   if(playing && esMiVoz()) stop();
   store.set('mvAcento', e.target.value); store.del('vozBase');
@@ -2658,7 +2670,7 @@ async function play(){
     return;
   }
   if(usaAudio()){ primeAudio(); await playAU(); return; }
-  if(!synth){ showStatus('Este navegador no puede leer en voz alta. Abre la app en Safari (iPhone) o Chrome (Android).', 'err'); return; }
+  if(!synth){ showStatus('Este navegador no puede leer en voz alta con las voces del sistema. Usa la voz «Natural», o abre la app en Safari (iPhone), Chrome (Android) o Edge/Chrome (Windows).', 'err'); return; }
   primeAudio();
   if(!voices.length || !voiceBy.es){
     voices = synth.getVoices();
@@ -2733,7 +2745,7 @@ document.addEventListener('visibilitychange', ()=>{
     MV.fondoTel = false;
     if(!store.get('avisoFondo')){
       store.set('avisoFondo', true);
-      showStatus('Con la voz del teléfono, iPhone pausa la lectura cuando sales de LectorLibre (sigue sola al volver). Para escuchar mientras usas otras apps o con el teléfono bloqueado, usa «Mi voz» ya preparada.');
+      showStatus(`Con la voz del sistema, ${SISTEMA} puede pausar la lectura cuando sales de LectorLibre (sigue sola al volver). Para escuchar mientras usas otras apps o con la pantalla bloqueada, usa la voz «Natural» o «Mi voz».`);
     }
   }
 });
