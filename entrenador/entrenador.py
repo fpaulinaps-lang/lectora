@@ -277,7 +277,10 @@ def main():
     elif viejo.get('estado') == 'entrenando':   # se apagó el computador a mitad: se sigue donde quedó
         print('== Retomo el entrenamiento que quedó a medias.')
         threading.Thread(target=entrenar, args=(viejo.get('epocas') or viejo.get('total') or EPOCAS_POR_DEFECTO, True), daemon=True).start()
-    seguro = ThreadingHTTPServer(('0.0.0.0', PUERTO), Manejador)
+    try: seguro = ThreadingHTTPServer(('0.0.0.0', PUERTO), Manejador)
+    except OSError:
+        print(f'\nEl puerto {PUERTO} está ocupado: probablemente el entrenador ya está abierto en otra ventana. Ciérrala (o reinicia el computador) y vuelve a abrirlo.')
+        input('Enter para cerrar'); return
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(BASE / 'servidor.crt', BASE / 'servidor.key')
     seguro.socket = ctx.wrap_socket(seguro.socket, server_side=True)
     simple = ThreadingHTTPServer(('0.0.0.0', PUERTO_HTTP), Manejador)
