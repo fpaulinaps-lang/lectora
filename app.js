@@ -2909,7 +2909,7 @@ function updateVoiceBtn(){
 }
 // Versión del código que está corriendo: sirve para saber si el teléfono se quedó con una copia vieja
 // (tiene que coincidir con CACHE en sw.js; si no coincide, cierra la app y vuelve a abrirla con internet).
-const VERSION_APP = 'v47';
+const VERSION_APP = 'v48';
 function verVersion(){
   const el = $('#verApp'); if(!el) return;
   if(!self.caches){ el.textContent = 'Versión de la app: ' + VERSION_APP; return; }
