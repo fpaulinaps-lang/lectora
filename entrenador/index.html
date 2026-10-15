@@ -3,49 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Entrenador de LectorLibre</title>
+<title>Entrenador Aislado de LectorLibre</title>
 <style>
-:root{--bg:#FFF7E0; --paper:#FFFDF6; --ink:#2B1512; --muted:#7A5A4E; --line:#F1DDA8; --accent:#C8102E}
-@media (prefers-color-scheme: dark){:root{--bg:#1B100E; --paper:#251715; --ink:#F7EADF; --muted:#C9A697; --line:#4A2C25}}
+:root{--bg:#FFF7E0; --paper:#FFFDF6; --ink:#2B1512; --muted:#7A5A4E; --line:#F1DDA8; --accent:#C8102E; --green:#2E7D32}
+@media (prefers-color-scheme: dark){:root{--bg:#1B100E; --paper:#251715; --ink:#F7EADF; --muted:#C9A697; --line:#4A2C25; --green:#4CAF50}}
 body{margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 -apple-system, system-ui, "Segoe UI", sans-serif}
-main{max-width:40rem; margin:0 auto; padding:24px 16px 48px}
+main{max-width:42rem; margin:0 auto; padding:24px 16px 48px}
 h1{font-size:1.6rem; margin:0 0 4px} h1 span{color:var(--accent)}
-.card{background:var(--paper); border:1px solid var(--line); border-radius:16px; padding:16px 18px; margin:16px 0}
-a.b{display:inline-block; background:var(--accent); color:#fff; padding:11px 18px; border-radius:999px; text-decoration:none; font-weight:700; margin:6px 8px 6px 0}
-.muted{color:var(--muted); font-size:.92rem} ol{padding-left:1.3em} li{margin:6px 0} code{background:var(--bg); padding:1px 6px; border-radius:6px}
+.badge-sec{display:inline-block; background:#E8F5E9; color:#1B5E20; padding:4px 12px; border-radius:999px; font-size:.85rem; font-weight:700; margin-bottom:12px}
+@media (prefers-color-scheme: dark){.badge-sec{background:#1B381E; color:#A5D6A7}}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:16px; padding:18px 20px; margin:16px 0; box-shadow:0 1px 3px rgba(0,0,0,0.03)}
+a.b{display:inline-block; background:var(--accent); color:#fff; padding:11px 20px; border-radius:999px; text-decoration:none; font-weight:700; margin:6px 8px 6px 0}
+.muted{color:var(--muted); font-size:.92rem} ol{padding-left:1.3em} li{margin:8px 0} code{background:var(--bg); padding:2px 6px; border-radius:6px}
 </style>
 </head>
 <body>
 <main>
-<h1>Lector<span>Libre</span>: entrenar tu voz</h1>
-<div class="card" id="esTelefono" hidden style="border-color:#C8102E"><b>Abre esta página en tu computador</b> (Mac o Windows), no en el teléfono: el entrenador corre en el computador. Desde el computador entra a <b>fpaulinaps-lang.github.io/lectora/entrenador</b>.</div>
-<p class="muted">Tu computador entrena un modelo que habla con tu voz, tu acento y tu ritmo. Todo pasa dentro de tu casa: las grabaciones van del teléfono al computador por tu Wi-Fi, sin cuentas ni servidores.</p>
+<span class="badge-sec" style="background:#FDE7E9;color:#8E1023">🔒 DESACTIVADO POR SEGURIDAD · en rediseño</span>
+<h1>Lector<span>Libre</span>: Entrenador de Voz</h1>
 
-<div class="card">
-<b>1. Baja el entrenador en este computador</b><br>
-<a class="b" href="entrenador-mac.command" download>Mac</a><a class="b" href="entrenador-windows.bat" download>Windows</a>
-<p class="muted"><b>Mac:</b> en Descargas, clic derecho sobre «entrenador-mac.command» › <b>Abrir</b> (la primera vez macOS pregunta).<br>
-<b>Windows:</b> doble clic en «entrenador-windows.bat»; si aparece «Windows protegió su PC», toca <b>Más información › Ejecutar de todas formas</b>, y si pregunta por el Firewall, permite el acceso en <b>redes privadas</b>.</p>
-<p class="muted">La primera vez instala lo necesario (unos 3 GB, entre 10 y 20 minutos). Después muestra una <b>dirección</b> y un <b>código</b>.</p>
+<div class="card" style="border-color:#C8102E">
+  <b>El entrenador de voz está apagado a propósito.</b>
+  <p class="muted" style="margin:8px 0 0 0">Se detectaron problemas de seguridad que había que resolver antes de seguir usándolo:</p>
+  <ol class="muted">
+    <li>La «bóveda biométrica» de la app <b>se podía abrir sin Face ID</b>: la llave de cifrado se
+        reconstruía con datos que estaban guardados junto al propio modelo.</li>
+    <li>El entrenador <b>escuchaba en toda la red</b> (no solo en <code>127.0.0.1</code>) y se protegía con
+        un código de 6 dígitos <b>sin límite de intentos</b>: medido, se podía adivinar en ~26 minutos
+        desde una página web cualquiera.</li>
+    <li>Pedía <b>instalar una autoridad de certificados</b> como raíz de confianza del teléfono.</li>
+  </ol>
 </div>
 
 <div class="card">
-<b>2. En el teléfono, una sola vez: confía en el computador</b>
-<p>Con el teléfono en el mismo Wi-Fi, abre en el navegador <code>http://&lt;dirección&gt;:8766</code> (la que muestra el entrenador) y sigue los pasos para iPhone o Android.</p>
+  <b>Qué se hizo</b>
+  <ul class="muted">
+    <li><b>Se borraron</b> los datos de voz de esa función (grabaciones, modelo entrenado y checkpoints).
+        No quedaron guardados «bajo llave»: se eliminaron.</li>
+    <li>La app <b>ya no graba ni importa</b> el paquete <code>.lectoravoz</code>, y <b>borra</b> esos datos
+        al abrirla.</li>
+    <li>Este entrenador <b>no arranca</b>. Si ya lo descargaste, no lo ejecutes: no hace nada.</li>
+  </ul>
+  <p class="muted">Detalles completos, hallazgos y la lista de lo que falta para reactivarlo con
+  seguridad: <code>SEGURIDAD.md</code> en el proyecto.</p>
 </div>
 
 <div class="card">
-<b>3. Entrena desde la app</b>
-<ol>
-<li>En LectorLibre: <b>Voz › Mi voz › Entrenar mi voz</b> y graba las frases (unos 15 minutos, por partes si quieres).</li>
-<li>En <b>Entrenar en mi computador</b>, escribe la dirección y el código, y toca <b>Entrenar ahora</b>.</li>
-<li>Puedes seguir leyendo con las otras voces. Cuando el computador termine (unas 4 horas), la app baja tu voz sola y te avisa.</li>
-</ol>
-<p class="muted">Deja el computador encendido, enchufado y con esta ventana del entrenador abierta. Si se apaga a mitad, al volver a abrir el entrenador sigue donde quedó.</p>
+  <b>Mientras tanto, «Mi voz» sigue disponible sin esto</b>
+  <p class="muted">La grabación local de ~50 segundos dentro de la app (y la opción de usar un audio ya
+  grabado con Notas de Voz) funciona igual y <b>no sale de tu teléfono</b>.</p>
 </div>
 </main>
-<script>
-if(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) document.getElementById('esTelefono').hidden = false;
-</script>
 </body>
 </html>
