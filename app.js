@@ -2505,11 +2505,7 @@ function zipSinComprimir(archivos){
   fin.setUint32(0, 0x06054b50, true); fin.setUint16(8, archivos.length, true); fin.setUint16(10, archivos.length, true); fin.setUint32(12, tc, true); fin.setUint32(16, off, true);
   return new Blob([...partes, ...central, new Uint8Array(fin.buffer)], {type: 'application/zip'});
 }
-async function exportarEnt(){
-  const nota = $('#entNota');
-  await cargarEnt();
-  if(!ENT.hechas.size){ nota.textContent = 'Todavía no hay frases grabadas.'; return; }
-  nota.textContent = 'Armando el archivo…';
+async function armarZipEnt(){
   const enc = new TextEncoder(), archivos = []; let csv = '';
   for(const i of [...ENT.hechas].sort((a, b) => a - b)){
     const v = await kv.get('voz', 'ent:' + pad3(i)); if(!v) continue;
@@ -2519,10 +2515,17 @@ async function exportarEnt(){
   }
   archivos.push(['metadata.csv', enc.encode(csv)]);
   archivos.push(['LEEME.txt', enc.encode('Grabaciones de tu voz hechas con LectorLibre (cada WAV con su texto en metadata.csv).\n' +
-    'Para entrenar tu voz en el Mac: deja este .zip en Descargas y abre «Entrenar mi voz.command» (en LectoraEstudio).\n' +
+    'Para entrenar tu voz: en LectorLibre usa «Entrenar en mi computador», o abre el Entrenador en tu computador.\n' +
     'Estas grabaciones son tuyas: no se subieron a ningún servidor.\n')]);
+  return zipSinComprimir(archivos);
+}
+async function exportarEnt(){
+  const nota = $('#entNota');
+  await cargarEnt();
+  if(!ENT.hechas.size){ nota.textContent = 'Todavía no hay frases grabadas.'; return; }
+  nota.textContent = 'Armando el archivo…';
   const fecha = new Date().toISOString().slice(0, 10);
-  const archivo = new File([zipSinComprimir(archivos)], `LectorLibre-mi-voz-${fecha}.zip`, {type: 'application/zip'});
+  const archivo = new File([await armarZipEnt()], `LectorLibre-mi-voz-${fecha}.zip`, {type: 'application/zip'});
   try{
     if(navigator.canShare && navigator.canShare({files: [archivo]})){ await navigator.share({files: [archivo], title: 'Grabaciones de mi voz'}); nota.textContent = 'Listo. Pásalo al computador (AirDrop, Archivos, cable…) para entrenar.'; return; }
   }catch(e){ if(e && e.name === 'AbortError'){ nota.textContent = ''; return; } }
@@ -2535,6 +2538,19 @@ function vozEntrenadaNA(){
   const m = store.get('vozEntrenada', null); if(!m) return null;
   return {id: 'mi-voz-entrenada', nombre: 'Mi voz entrenada', mb: m.mb, modelo: URL_ENTRENADA + 'voz.onnx', config: URL_ENTRENADA + 'voz.onnx.json'};
 }
+// Guarda el modelo en el teléfono y lo agrega como voz de «Natural» (sin cambiar lo que estés escuchando).
+async function instalarVozEntrenada(onnx, json, extra){
+  const cfg = JSON.parse(await json.text());
+  if(!cfg.audio || !cfg.audio.sample_rate || !(cfg.espeak || cfg.phoneme_id_map)) throw new Error('Ese .json no parece de una voz Piper.');
+  const c = await caches.open('lectora-voces');
+  await c.put(URL_ENTRENADA + 'voz.onnx', new Response(onnx));
+  await c.put(URL_ENTRENADA + 'voz.onnx.json', new Response(json));
+  store.set('vozEntrenada', {mb: Math.round(onnx.size / 1e6), fecha: Date.now(), ...extra});
+  VOCES_NA.es = VOCES_NA.es.filter(v => v.id !== 'mi-voz-entrenada'); VOCES_NA.es.unshift(vozEntrenadaNA());
+  // si esa voz estaba cargada, se suelta para que la próxima lectura use la nueva
+  if(vozNA('es').id === 'mi-voz-entrenada' && !playing){ soltarNA(); olvidarBloques(); }
+  if(!$('#scrim').hidden) llenarNA();
+}
 async function usarVozEntrenada(files){
   const nota = $('#entNota');
   const onnx = [...files].find(f => /\.onnx$/i.test(f.name)), json = [...files].find(f => /\.json$/i.test(f.name));
@@ -2542,13 +2558,9 @@ async function usarVozEntrenada(files){
   let cfg;
   try{ cfg = JSON.parse(await json.text()); }catch(e){ nota.textContent = 'El archivo .json no se pudo leer.'; return; }
   if(!cfg.audio || !cfg.audio.sample_rate || !(cfg.espeak || cfg.phoneme_id_map)){ nota.textContent = 'Ese .json no parece de una voz Piper.'; return; }
-  const c = await caches.open('lectora-voces');
-  await c.put(URL_ENTRENADA + 'voz.onnx', new Response(onnx));
-  await c.put(URL_ENTRENADA + 'voz.onnx.json', new Response(json));
-  store.set('vozEntrenada', {mb: Math.round(onnx.size / 1e6), fecha: Date.now()});
-  VOCES_NA.es = VOCES_NA.es.filter(v => v.id !== 'mi-voz-entrenada'); VOCES_NA.es.unshift(vozEntrenadaNA());
+  await instalarVozEntrenada(onnx, json, {});
   store.set('na:es', 'mi-voz-entrenada');
-  soltarNA(); olvidarBloques();
+  if(playing) stop();
   diag('se cargó «Mi voz entrenada» (' + Math.round(onnx.size / 1e6) + ' MB)');
   nota.textContent = 'Listo: «Mi voz entrenada» quedó como voz en español de «Natural». Se usa como cualquier voz natural, sin esperas.';
   setModo('natural'); llenarNA();
@@ -2558,6 +2570,116 @@ $('#recBtn').onclick = ()=> abrirGuia('similitud');
 $('#entGrabar').onclick = ()=> abrirGuia('entrenar');
 $('#entExportar').onclick = exportarEnt;
 $('#entUsar').onclick = ()=> $('#entArchivos').click();
+/* ---------- Entrenar en mi computador (por el Wi-Fi de la casa) ---------- */
+// El teléfono no puede entrenar (haría falta días), así que se lo encarga al computador de la casa (Mac o
+// Windows) donde corre el «Entrenador de LectorLibre»: se le mandan las grabaciones por el Wi-Fi, entrena por
+// detrás (~4 h) y, cuando termina, la app baja la voz sola. Mientras tanto la app se usa normal con las otras
+// voces: solo pregunta de vez en cuando cómo va. La conexión es https (la app viene de https) con el permiso
+// que el computador ofrece en http://<dirección>:8766, y un código de 6 números para que nadie más la use.
+const PC = {timer: null, bajando: false, ultimo: null};
+const pcConf = () => store.get('entrenador', null);
+const pcLimpia = d => (d || '').trim().replace(/^https?:\/\//i, '').replace(/[:/].*$/, '').replace(/[^0-9a-zA-Z.\-]/g, '');
+async function pcPedir(ruta, opts = {}){
+  const c = pcConf(); if(!c) throw new Error('Primero conecta tu computador.');
+  let r;
+  try{ r = await fetch(`https://${c.dir}:8765${ruta}`, {...opts, headers: {'X-Clave': c.codigo, ...(opts.headers || {})}}); }
+  catch(e){ throw Object.assign(new Error('sin conexión'), {red: true}); }
+  if(r.status === 403) throw new Error('El código no coincide con el que muestra el entrenador del computador.');
+  if(!r.ok){ let m = ''; try{ m = (await r.json()).error; }catch(e){} throw new Error(m || 'error ' + r.status); }
+  return r;
+}
+function pcEstado(txt, conEnlace){
+  const el = $('#pcEstado'), c = pcConf();
+  el.textContent = txt;
+  if(conEnlace && c){
+    const a = document.createElement('a'); a.href = `http://${c.dir}:8766`; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = ` Abrir http://${c.dir}:8766 para confiar en el computador`; el.appendChild(a);
+  }
+}
+function pcAyuda(){
+  return 'No pude conectar con el computador. Revisa que el entrenador esté abierto allá, que el teléfono esté en el mismo Wi-Fi y, la primera vez, abre esta dirección en el navegador del teléfono y sigue los pasos para confiar en el computador:';
+}
+async function pcConectar(){
+  const dir = pcLimpia($('#pcDir').value), codigo = $('#pcCodigo').value.replace(/\D/g, '');
+  if(!dir || codigo.length !== 6){ pcEstado('Escribe la dirección y el código de 6 números que muestra el entrenador en el computador.'); return; }
+  store.set('entrenador', {dir, codigo});
+  pcEstado('Conectando…');
+  try{ await pcPedir('/estado'); diag('conectado con el entrenador del computador (' + dir + ')'); await pcRevisar(true); }
+  catch(e){ e.red ? pcEstado(pcAyuda(), true) : pcEstado(e.message); }
+}
+async function pcEntrenar(){
+  await cargarEnt();
+  if(ENT.hechas.size < 30){ pcEstado(`Graba al menos 30 frases (llevas ${ENT.hechas.size}); lo ideal son 150 o más.`); return; }
+  const c = pcConf(); if(!c){ pcEstado('Primero conecta tu computador.'); return; }
+  pcEstado('Preparando tus grabaciones…');
+  const zip = await armarZipEnt();
+  // XMLHttpRequest: es la única forma de ver el avance de una subida
+  await new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', `https://${c.dir}:8765/entrenar?epocas=${store.get('pcEpocas', 70)}`);   // vueltas: 70 ≈ 4 h con 230 frases
+    x.setRequestHeader('X-Clave', c.codigo);
+    x.upload.onprogress = e => { if(e.total) pcEstado(`Mandando tus grabaciones al computador: ${Math.round(e.loaded / e.total * 100)}%`); };
+    x.onload = () => x.status === 200 ? res() : rej(new Error((() => { try{ return JSON.parse(x.responseText).error; }catch(e){ return 'error ' + x.status; } })()));
+    x.onerror = () => rej(Object.assign(new Error('sin conexión'), {red: true}));
+    x.send(zip);
+  }).then(() => { diag(`grabaciones enviadas al computador (${ENT.hechas.size} frases)`); pcRevisar(true); })
+    .catch(e => e.red ? pcEstado(pcAyuda(), true) : pcEstado(e.message));
+}
+// Pregunta cómo va. Con la hoja de voz abierta, cada 10 s; si no, cada 3 min mientras entrena; nada si no hay nada que esperar.
+async function pcRevisar(pantalla){
+  clearTimeout(PC.timer);
+  const c = pcConf(); if(!c) return;
+  let e;
+  try{ e = await (await pcPedir('/estado')).json(); }
+  catch(err){
+    if(pantalla) err.red ? pcEstado(pcAyuda(), true) : pcEstado(err.message);
+    if(PC.ultimo && PC.ultimo.estado === 'entrenando') PC.timer = setTimeout(pcRevisar, 3 * 60 * 1000);   // el computador puede volver
+    return;
+  }
+  PC.ultimo = e;
+  const visible = !$('#scrim').hidden && modo === 'mivoz';
+  $('#pcBar').style.width = Math.round((e.progreso || 0) * 100) + '%';
+  $('#pcEntrenar').hidden = e.estado === 'entrenando'; $('#pcCancelar').hidden = e.estado !== 'entrenando';
+  const yaTengo = (store.get('vozEntrenada', null) || {}).desdePC === (e.modelo && e.modelo.fecha);
+  if(e.estado === 'entrenando'){
+    pcEstado(`Entrenando en tu computador: ${Math.round(e.progreso * 100)}% · ${e.mensaje}` + (e.restante_min ? ` · faltan ~${fmtTime(e.restante_min * 60)}` : '') + '. Puedes seguir usando la app con las otras voces.');
+    PC.timer = setTimeout(pcRevisar, visible ? 10000 : 3 * 60 * 1000);
+  } else if(e.estado === 'listo' && e.modelo && !yaTengo){
+    pcBajar(e.modelo);
+  } else if(e.estado === 'listo'){
+    pcEstado('Conectado. Tu voz entrenada ya está en este teléfono (en «Natural» › «Mi voz entrenada»). Puedes volver a entrenar con más frases cuando quieras.');
+  } else if(e.estado === 'error'){
+    pcEstado('El entrenamiento falló en el computador: ' + e.mensaje);
+  } else {
+    pcEstado('Conectado con tu computador. Cuando tengas tus frases grabadas, toca «Entrenar ahora».');
+  }
+}
+async function pcBajar(modelo){
+  if(PC.bajando) return; PC.bajando = true;
+  try{
+    pcEstado('Tu voz está lista: bajándola del computador…');
+    const r = await pcPedir('/modelo.onnx');
+    const total = +r.headers.get('Content-Length') || 0, partes = []; let n = 0;
+    const lector = r.body.getReader();
+    for(;;){ const {done, value} = await lector.read(); if(done) break; partes.push(value); n += value.length; if(total) pcEstado(`Bajando tu voz del computador: ${Math.round(n / total * 100)}%`); }
+    const onnx = new Blob(partes), json = await (await pcPedir('/modelo.onnx.json')).blob();
+    await instalarVozEntrenada(onnx, json, {desdePC: modelo.fecha});
+    pcEstado('¡Lista! Tu voz entrenada quedó en este teléfono: en «Natural», voz en español «Mi voz entrenada».');
+    // aviso, sin interrumpir lo que estés escuchando
+    showStatus('Tu voz entrenada está lista.', null, null, 'Escucharla', ()=>{ hideStatus(); if(playing) stop(); store.set('na:es', 'mi-voz-entrenada'); setModo('natural'); play(); });
+    diag('voz entrenada bajada del computador (' + Math.round(onnx.size / 1e6) + ' MB)');
+  }catch(e){ e.red ? pcEstado(pcAyuda(), true) : pcEstado('No pude bajar tu voz: ' + e.message); }
+  finally{ PC.bajando = false; }
+}
+async function pcCancelar(){
+  try{ await pcPedir('/cancelar', {method: 'POST'}); pcEstado('Entrenamiento cancelado.'); }catch(e){ pcEstado(e.message); }
+  setTimeout(() => pcRevisar(true), 1000);
+}
+$('#pcConectar').onclick = pcConectar;
+$('#pcEntrenar').onclick = pcEntrenar;
+$('#pcCancelar').onclick = pcCancelar;
+{ const c = pcConf(); if(c){ $('#pcDir').value = c.dir; $('#pcCodigo').value = c.codigo; setTimeout(() => pcRevisar(false), 5000); } }
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && pcConf() && PC.ultimo && PC.ultimo.estado === 'entrenando') pcRevisar(false); });
 $('#entArchivos').onchange = e => { const f = e.target.files; if(f && f.length) usarVozEntrenada(f).catch(err => $('#entNota').textContent = err.message || String(err)); e.target.value = ''; };
 $('#mvAcento').value = store.get('mvAcento', 'latino');
 $('#mvArranque').checked = arranqueMV();
@@ -2819,7 +2941,7 @@ function openSheet(){
   setModo(modo); llenarNA();
   $('#diagTexto').textContent = store.get('diag', []).slice().reverse().join('\n') || 'Todavía no hay nada anotado.';
   verVersion(); verMiVoz();
-  if(modo === 'mivoz') cargarEnt().then(pintarEnt).catch(()=>{});
+  if(modo === 'mivoz'){ cargarEnt().then(pintarEnt).catch(()=>{}); if(pcConf()) pcRevisar(true); }
   if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(()=>{ mostrarAdelanto(); actualizarNA(); });
   $('#scrim').hidden = false; fillVoices();
 }

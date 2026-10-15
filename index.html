@@ -157,6 +157,8 @@ body.leyendo main{padding-block:14px 190px}
 .rec-big:disabled{opacity:.5}
 @keyframes latido{50%{transform:scale(1.07)}}
 @media (max-height:640px){ .guia-pasos{font-size:.88rem; gap:5px} .rec-big{width:74px; height:74px} .frase{font-size:clamp(1.05rem, 5vw, 1.3rem)} }
+.pc-campos input{flex:1; min-width:7rem; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--paper); color:var(--ink); font-size:16px}
+#pcCodigo{flex:0 1 7rem; letter-spacing:.15em}
 .diag{margin:14px 0}
 .diag summary{font-weight:700; color:var(--muted); cursor:pointer; padding:6px 0}
 .diag pre{white-space:pre-wrap; word-break:break-word; font-size:.72rem; line-height:1.45; max-height:260px; overflow:auto; background:var(--paper); color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:10px; margin:6px 0 0}
@@ -301,6 +303,14 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
           <div class="row"><button class="btn" id="entGrabar">Grabar frases</button><button class="btn ghost" id="entExportar">Exportar grabaciones</button></div>
           <div class="row"><button class="btn ghost" id="entUsar">Usar mi voz entrenada</button><input type="file" id="entArchivos" multiple hidden></div>
           <p class="hint" id="entNota"></p>
+          <div class="panel" id="pcBox">
+            <span class="lbl">Entrenar en mi computador (automático)</span>
+            <p class="hint">En tu computador (Mac o Windows) abre <b>fpaulinaps-lang.github.io/lectora/entrenador</b>, baja el entrenador y ábrelo: te muestra una dirección y un código. El computador entrena por detrás (unas 4 h) y la app baja tu voz sola; mientras, puedes seguir leyendo con las otras voces. Todo va por el Wi-Fi de tu casa.</p>
+            <div class="row pc-campos"><input id="pcDir" placeholder="Dirección (ej. 192.168.1.20)" inputmode="decimal" autocomplete="off"><input id="pcCodigo" placeholder="Código" inputmode="numeric" maxlength="6" autocomplete="off"></div>
+            <div class="row"><button class="btn ghost" id="pcConectar">Conectar</button><button class="btn" id="pcEntrenar">Entrenar ahora</button><button class="btn ghost" id="pcCancelar" hidden>Cancelar</button></div>
+            <div class="prog"><i id="pcBar"></i></div>
+            <p class="hint" id="pcEstado"></p>
+          </div>
         </div>
         <div class="panel" id="mvPrepBox" hidden>
           <span class="lbl">Pre-generar libro completo (opcional)</span>
