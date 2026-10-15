@@ -255,6 +255,9 @@ const VOCES_NA = {
        {id: 'en_US-amy-medium', ruta: 'en/en_US/amy/medium', nombre: 'Amy · EE. UU.', mb: 63}],
 };
 if(store.get('na:es') === 'es_MX-ald-medium'){ store.set('na:es', 'es_MX-claude-high'); }
+// dónde está el modelo: las voces de Piper en Hugging Face; «Mi voz entrenada», guardada en el teléfono
+const urlModeloNA = v => v.modelo || PIPER + v.ruta + '/' + v.id + '.onnx';
+{ const m = store.get('vozEntrenada', null); if(m) VOCES_NA.es.unshift({id: 'mi-voz-entrenada', nombre: 'Mi voz entrenada', mb: m.mb, modelo: new URL('mi-voz-entrenada/voz.onnx', location.href).href}); }
 const vozNA = l => { const v = VOCES_NA[l === 'en' ? 'en' : 'es']; return v.find(x => x.id === store.get('na:' + (l === 'en' ? 'en' : 'es'))) || v[0]; };
 
 /* ---------- Biblioteca ---------- */
@@ -1317,7 +1320,7 @@ function precalentarNA(yLeer, espera){
     if(!esNatural() || !flat.length || (playing && !yLeer)) return;
     try{
       const l = flat[idx].l, v = vozNA(l), c = await caches.open('lectora-voces');
-      if(!(await c.match(PIPER + v.ruta + '/' + v.id + '.onnx'))){ if(yLeer) play(); return; }
+      if(!(await c.match(urlModeloNA(v)))){ if(yLeer) play(); return; }
       await discoNA();
       if(yLeer){ play(); return; }
       await cargarVozNA(l, 0);
@@ -1612,7 +1615,7 @@ async function relevar(){
   try{ await audioVoz.play(); }
   catch(e){
     if(audioVoz !== L.el) return;
-    diag('el iPhone no dejó seguir con el bloque siguiente: ' + (e && e.name));
+    diag(`${SISTEMA} no dejó seguir con el bloque siguiente: ` + (e && e.name));
     stop(); showStatus('El teléfono detuvo la lectura. Toca reproducir para seguir.'); return;
   }
   viejo.pause(); soltarBloque(bViejo, viejo);
@@ -1690,7 +1693,9 @@ async function abrirST(desde){
   cerrarST();
   const tok = ST.tok, F = fuenteAU();
   ST.alimentando = true;                                   // nadie más agrega audio hasta que esté la primera frase
-  await F.primera(desde);                                  // la voz cargada y la primera frase lista
+  let primera = null;
+  if(esMiVoz() && MV.arranque){ await asegurarCfgMV(); primera = await audioBaseST(desde); }   // voz base: ~1 s
+  else await F.primera(desde);                             // la voz cargada y la primera frase lista
   if(tok !== ST.tok) throw new Error('detenido');
   const ms = new MSE();
   ST.ms = ms; ST.sr = F.sr; ST.muestras = 0; ST.linea = []; ST.sig = desde; ST.fin = false;
@@ -2075,6 +2080,8 @@ function avisoMiVoz(msg, malo){
 function ayudaMicrofono(){
   if(esChromeIOS) return 'Para darle micrófono a Chrome: Ajustes del iPhone › Chrome › activa «Micrófono». Si antes dijiste «No permitir», iOS no vuelve a preguntar, así que hay que activarlo a mano.';
   if(esIOS) return 'Para darle micrófono a Safari: Ajustes del iPhone › Safari › Micrófono (y Ajustes › Privacidad › Micrófono). Si antes dijiste «No permitir», iOS no vuelve a preguntar.';
+  if(PLAT === 'android') return 'Para darle micrófono: toca el candado junto a la dirección › Permisos › Micrófono › Permitir (y en Ajustes › Apps › Chrome › Permisos › Micrófono).';
+  if(PLAT === 'windows') return 'Para darle micrófono: haz clic en el candado junto a la dirección › Micrófono › Permitir, y revisa Configuración › Privacidad y seguridad › Micrófono (que los navegadores tengan acceso).';
   return 'Revisa el permiso de micrófono de esta página en el navegador.';
 }
 // Convierte un audio (de la grabación o de un archivo) en tu huella de voz y lo guarda en el teléfono.
@@ -2085,7 +2092,7 @@ async function guardarVoz(blob, ctx){
   try{
     let pcm;
     try{ pcm = await c.decodeAudioData(await blob.arrayBuffer()); }
-    catch(e){ throw new Error('No pude leer ese audio. Prueba con un archivo grabado con Notas de Voz (.m4a) o un .wav o .mp3.'); }
+    catch(e){ throw new Error(`No pude leer ese audio. Prueba con un archivo grabado con ${GRABADORA} (.m4a, .wav o .mp3).`); }
     if(pcm.duration < 15) throw new Error(`El audio dura ${Math.round(pcm.duration)} segundos y es muy corto: lee el texto completo (unos 50 segundos).`);
     if(!MV.M) MV.M = await import('./voz/motor.js');
     let a = MV.M.recortar(pcm.getChannelData(0));
@@ -2171,6 +2178,7 @@ function pantallaGuia(cual){
   for(const id of ['guiaIntro', 'guiaFrase', 'guiaFin']) $('#' + id).hidden = id !== cual;
 }
 function pintarSimilitud(){
+  if(GV.modo === 'entrenar'){ pintarEnt(); return; }
   const s = simGuia(), pct = s == null ? null : Math.max(0, Math.min(100, Math.round(s * 100)));
   $('#guiaSimVal').textContent = pct == null ? '—' : pct + '%';
   $('#guiaSimBar').style.width = (GV.completo ? 100 : pct || 0) + '%';
@@ -2186,18 +2194,39 @@ function pintarSimilitud(){
 }
 function mostrarFrase(){
   pantallaGuia('guiaFrase');
-  $('#guiaNum').textContent = `Frase ${GV.n + 1}`;
-  $('#guiaTexto').textContent = FRASES_VOZ[GV.n % FRASES_VOZ.length];
+  if(GV.modo === 'entrenar'){
+    GV.iEnt = sigEnt(GV.iEnt || 0);
+    if(GV.iEnt < 0){ cerrarGuia(); $('#entNota').textContent = '¡Grabaste todas las frases! Ahora toca «Exportar grabaciones».'; return; }
+    $('#guiaNum').textContent = `Frase ${GV.iEnt + 1} de ${FRASES_ENT.length}`;
+    $('#guiaTexto').textContent = FRASES_ENT[GV.iEnt];
+  } else {
+    $('#guiaNum').textContent = `Frase ${GV.n + 1}`;
+    $('#guiaTexto').textContent = FRASES_VOZ[GV.n % FRASES_VOZ.length];
+  }
   $('#guiaGrabar').textContent = '● Grabar'; $('#guiaGrabar').classList.remove('on'); $('#guiaGrabar').disabled = false;
   $('#guiaNivel').style.width = '0%';
   pintarSimilitud();
 }
 
-function abrirGuia(){
-  cargarGuia();
+async function abrirGuia(modo = 'similitud'){
+  GV.modo = modo;
   GV.abierta = true;
   $('#guia').hidden = false;
   $('#guiaAviso').hidden = true;
+  $('#guiaTit').textContent = modo === 'entrenar' ? 'Entrenar tu voz' : 'Graba tu voz';
+  $('#guiaPasosSim').hidden = modo === 'entrenar'; $('#guiaPasosEnt').hidden = modo !== 'entrenar';
+  $('#guiaSim .fila span').textContent = modo === 'entrenar' ? 'Frases grabadas' : 'Similitud con tu voz';
+  if(modo === 'entrenar'){
+    await cargarEnt();
+    const n = ENT.hechas.size;
+    $('#guiaEmpezar').textContent = n ? `Seguir (${n} de ${FRASES_ENT.length})` : 'Empezar';
+    $('#guiaDeCero').hidden = true;
+    $('#guiaDescarga').textContent = 'Todo queda solo en este teléfono hasta que lo exportes.';
+    pantallaGuia('guiaIntro');
+    return;
+  }
+  $('#guiaDescarga').textContent = 'La primera vez se baja el motor de voz (unos 140 MB): usa Wi-Fi.';
+  cargarGuia();
   const s = simGuia();
   if(GV.completo){
     $('#guiaEmpezar').textContent = 'Grabar de nuevo desde cero'; $('#guiaDeCero').hidden = true;
@@ -2209,7 +2238,7 @@ function abrirGuia(){
   cargarMotorGuia();
 }
 async function empezarGuia(deCero){
-  if(deCero){ GV.emb = []; GV.sims = []; GV.n = 0; GV.estables = 0; GV.completo = false; guardarGuia(); }
+  if(deCero && GV.modo !== 'entrenar'){ GV.emb = []; GV.sims = []; GV.n = 0; GV.estables = 0; GV.completo = false; guardarGuia(); }
   const aviso = t => { $('#guiaAviso').hidden = !t; $('#guiaAviso').textContent = t || ''; };
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder){
     aviso('Este navegador no deja grabar desde la app. ' + ayudaMicrofono()); return;
@@ -2259,8 +2288,8 @@ function grabarFrase(){
     GV.grabando = false; cancelAnimationFrame(GV.raf);
     b.textContent = '● Grabar'; b.classList.remove('on'); $('#guiaNivel').style.width = '0%';
     if(!GV.abierta) return;
-    const nFrase = GV.n + 1;
-    GV.n++;
+    const nFrase = GV.modo === 'entrenar' ? GV.iEnt + 1 : GV.n + 1, iEnt = GV.iEnt;
+    if(GV.modo === 'entrenar') GV.iEnt = iEnt + 1; else GV.n++;
     if(!GV.completo) mostrarFrase();                         // sin esperar: la revisión sigue por detrás
     const blob = new Blob(partes, {type: rec.mimeType || 'audio/mp4'});
     const malo = msg => { $('#guiaEstado').textContent = `La frase ${nFrase} no se usó: ${msg}`; };
@@ -2272,6 +2301,7 @@ function grabarFrase(){
     const voz = MV.M ? MV.M.recortar(d).length / pcm.sampleRate : pcm.duration;
     if(pico < 0.03 || voz < 1.2){ malo('no se escuchó bien (acércate un poco al teléfono).'); return; }
     if(recortes > d.length * 0.01){ malo('se escuchó muy fuerte (aléjate un poco).'); return; }
+    if(GV.modo === 'entrenar'){ guardarEnt(iEnt, texto, d, pcm.sampleRate).catch(e => malo('no se pudo guardar (' + (e.message || e) + ').')); return; }
     kv.put('voz', 'grabacion', blob).catch(()=>{});            // «Escuchar grabación» toca la última
     kv.put('voz', 'comparar', {blob, texto}).catch(()=>{});     // «Comparar»: tu grabación y la copia, misma frase
     encolarAnalisis({texto, pcm: Float32Array.from(d), sr: pcm.sampleRate});
@@ -2777,6 +2807,7 @@ function openSheet(){
   setModo(modo); llenarNA();
   $('#diagTexto').textContent = store.get('diag', []).slice().reverse().join('\n') || 'Todavía no hay nada anotado.';
   verVersion(); verMiVoz();
+  if(modo === 'mivoz') cargarEnt().then(pintarEnt).catch(()=>{});
   if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(()=>{ mostrarAdelanto(); actualizarNA(); });
   $('#scrim').hidden = false; fillVoices();
 }

@@ -268,13 +268,14 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
       <div class="panel" data-panel="mivoz" hidden>
         <p class="hint">Lee tus libros con tu voz usando clonación por inteligencia artificial. Una vez grabada tu voz, <b>puedes tocar «Leer» (▶) directamente</b>: la lectura comienza al vuelo y el teléfono genera las siguientes frases en segundo plano mientras escuchas. La primera vez descarga el motor (unos 140 MB por única vez; usa Wi-Fi). La voz base habla español nativo y el motor le pone tu timbre.</p>
         <div id="recEmpty" class="panel">
-          <p class="hint">Toca «Grabar mi voz»: leerás frases cortas, una por una, y después de cada una verás cuánto se parece tu voz clonada a la tuya. Si prefieres grabar con Notas de Voz, lee este texto:</p>
+          <p class="hint">Toca «Grabar mi voz»: leerás frases cortas, una por una, y después de cada una verás cuánto se parece tu voz clonada a la tuya. Si prefieres grabar con otra app (Notas de Voz en iPhone, Grabadora en Android o Windows), lee este texto:</p>
           <p class="script" id="recTexto">La lectura en voz alta cambia la manera en que entendemos un texto. Cada frase tiene su ritmo, sus pausas y su intención, y por eso vale la pena leer con calma, sin apuro, dejando que las ideas se acomoden solas. Cuando leo en voz alta escucho mejor lo que digo: las palabras pesan distinto y aparecen matices que la lectura silenciosa esconde. Por eso leo despacio, marcando bien cada sonido: la jota de jarra, la erre de carretera, la eñe de años, la zeta de zapato y la lluvia suave sobre la ventana. Hoy voy a leer varios documentos importantes, página por página, hasta terminarlos.</p>
         </div>
         <p class="note" id="recDone" hidden>Tu voz está grabada. La lectura se parece a ti en el tono; no copia exactamente tu acento ni tu manera de hablar.</p>
         <p class="hint" id="recSim" hidden></p>
         <div class="field"><label for="mvAcento">Acento de la lectura</label>
           <select id="mvAcento"><option value="latino">Latinoamericano (voz base de México)</option><option value="espana">De España</option></select></div>
+        <label class="check"><input type="checkbox" id="mvArranque" checked> Empezar al instante con la voz base mientras se prepara la tuya (avisa en pantalla cuándo cambia)</label>
         <div id="recLive" class="panel" hidden>
           <div class="meter"><i id="recLevel"></i></div>
           <p class="hint" id="recTime"></p>
@@ -290,8 +291,17 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
           <input type="file" id="recFile" accept="audio/*" hidden>
         </div>
         <p class="hint" id="recAviso" hidden></p>
-        <p class="hint">Si tu navegador no te da el micrófono, graba con la app <b>Notas de Voz</b> del iPhone (unos 50 segundos leyendo el texto de arriba), compártelo a <b>Archivos</b> y toca «Usar un audio grabado».</p>
+        <p class="hint">Si tu navegador no te da el micrófono, graba con otra app (<b>Notas de Voz</b> en iPhone, <b>Grabadora</b> en Android o Windows) unos 50 segundos leyendo el texto de arriba, y toca «Usar un audio grabado».</p>
         <p class="hint" id="mvTestNote"></p>
+        <div class="panel" id="entBox">
+          <span class="lbl">Entrenar mi voz (más fiel: tu acento y tu ritmo)</span>
+          <p class="hint">La voz clonada copia tu timbre, pero no tu acento ni tu ritmo. Para eso: graba unas 230 frases (unos 15 min, por partes si quieres), expórtalas al computador y entrénalas ahí. Todo queda en tus equipos: nada se sube a internet.</p>
+          <div class="prog"><i id="entBar"></i></div>
+          <p class="hint" id="entEstado"></p>
+          <div class="row"><button class="btn" id="entGrabar">Grabar frases</button><button class="btn ghost" id="entExportar">Exportar grabaciones</button></div>
+          <div class="row"><button class="btn ghost" id="entUsar">Usar mi voz entrenada</button><input type="file" id="entArchivos" multiple hidden></div>
+          <p class="hint" id="entNota"></p>
+        </div>
         <div class="panel" id="mvPrepBox" hidden>
           <span class="lbl">Pre-generar libro completo (opcional)</span>
           <div class="prog"><i id="mvBar"></i></div>
@@ -334,7 +344,13 @@ input[type=range]{flex:1; accent-color:var(--accent); min-width:10rem}
     <header><h2 id="guiaTit">Graba tu voz</h2><button class="guia-x" id="guiaCerrar" aria-label="Cerrar">×</button></header>
 
     <div class="guia-pant" id="guiaIntro">
-      <ol class="guia-pasos">
+      <ol class="guia-pasos" id="guiaPasosEnt" hidden>
+        <li>Vas a leer unas <b>230 frases cortas</b> (unos 15 minutos). Puedes hacerlo por partes: lo grabado queda guardado.</li>
+        <li>Lee con tu <b>tono y tu acento de siempre</b>, como si le leyeras a alguien.</li>
+        <li>Lugar <b>en silencio</b>, a un palmo del teléfono, siempre en el mismo lugar.</li>
+        <li>Al terminar, toca <b>«Exportar grabaciones»</b> y pásalas al computador: allí se entrena un modelo que habla como tú.</li>
+      </ol>
+      <ol class="guia-pasos" id="guiaPasosSim">
         <li>Vas a leer <b>frases cortas, una por una</b>.</li>
         <li>Busca un lugar <b>en silencio</b> y habla a un palmo del teléfono, con tu tono normal.</li>
         <li>Toca <b>● Grabar</b>, lee la frase y espera: se detiene sola cuando terminas.</li>
