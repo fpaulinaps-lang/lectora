@@ -990,7 +990,7 @@ function actualizarMV(){
   const tiene = !!store.get('vozSE');
   $('#recEmpty').hidden = tiene; $('#recDone').hidden = !tiene;
   $('#recBtn').textContent = tiene ? '● Grabar de nuevo' : '● Grabar mi voz';
-  $('#recPlay').hidden = !tiene; $('#mvTest').hidden = !tiene;
+  $('#recPlay').hidden = !tiene; $('#mvTest').hidden = !tiene; $('#mvComparar').hidden = !tiene;
   const g = store.get('vozGuia', null), sg = g && g.sims && g.sims.length ? g.sims.slice(-3).reduce((x, y) => x + y, 0) / Math.min(3, g.sims.length) : null;
   $('#recSim').hidden = sg == null;
   if(sg != null) $('#recSim').textContent = `Similitud de tu voz clonada: ${Math.round(sg * 100)}%` + (g.completo ? ' (la máxima posible)' : ` · toca «Grabar mi voz» para seguir mejorándola`);
@@ -2244,6 +2244,7 @@ function grabarFrase(){
     if(pico < 0.03 || voz < 1.2){ malo('no se escuchó bien (acércate un poco al teléfono).'); return; }
     if(recortes > d.length * 0.01){ malo('se escuchó muy fuerte (aléjate un poco).'); return; }
     kv.put('voz', 'grabacion', blob).catch(()=>{});            // «Escuchar grabación» toca la última
+    kv.put('voz', 'comparar', {blob, texto}).catch(()=>{});     // «Comparar»: tu grabación y la copia, misma frase
     encolarAnalisis({texto, pcm: Float32Array.from(d), sr: pcm.sampleRate});
   };
   rec.start(); tic();
@@ -2331,6 +2332,29 @@ $('#guiaOtra').onclick = ()=>{ if(GV.grabando) return; GV.n++; mostrarFrase(); }
 $('#guiaTerminar').onclick = cerrarGuia;
 $('#guiaCerrar').onclick = cerrarGuia;
 $('#guiaListo').onclick = cerrarGuia;
+// «Comparar»: suena tu grabación de una frase y después tu voz clonada diciendo la misma frase, para
+// juzgar de oído (la similitud de la barra mide el timbre, no el acento ni el ritmo).
+async function compararVoz(nota, btn){
+  const c = await kv.get('voz', 'comparar');
+  if(!c){ nota.textContent = 'Primero graba tu voz con «Grabar mi voz».'; return; }
+  btn.disabled = true;
+  const a = new Audio(); a.src = SILENCIO; a.play().catch(()=>{});   // con el toque: el teléfono deja sonar lo que sigue
+  const sonar = url => new Promise(res => { a.src = url; a.playbackRate = 1; a.onended = res; a.onerror = res; a.play().catch(res); });
+  try{
+    nota.textContent = 'Preparando la comparación (tu voz clonada lee la misma frase)…';
+    await motorMV(()=>{});
+    const b = MV.base.es;
+    const clon = await MV.M.convertir(await hablarBaseMV(c.texto, 'es', b), b.se, MV.tgt);
+    nota.textContent = `▶ A: tu grabación — «${c.texto}»`;
+    await sonar(URL.createObjectURL(c.blob));
+    nota.textContent = `▶ B: tu voz clonada (voz base ${b.nombre}) — la misma frase`;
+    await sonar(URL.createObjectURL(wav16(clon)));
+    nota.textContent = 'A = tu grabación · B = tu voz clonada. Toca «Comparar» para escucharlas otra vez.';
+  }catch(e){ nota.textContent = 'No pude comparar: ' + (e.message || e); }
+  finally{ btn.disabled = false; }
+}
+$('#guiaComparar').onclick = ()=> compararVoz($('#guiaFinNota'), $('#guiaComparar'));
+$('#mvComparar').onclick = ()=> compararVoz($('#mvTestNote'), $('#mvComparar'));
 $('#guiaProbar').onclick = async ()=>{
   const btn = $('#guiaProbar'); btn.disabled = true;
   const prueba = new Audio(); prueba.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; prueba.play().catch(()=>{});
