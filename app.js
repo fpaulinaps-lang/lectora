@@ -1088,7 +1088,7 @@ function cargarModeloNA(v, idioma, k = 0, avanceExtra){
   if(NA.cargadas.has(clave) && NA.cargadas.get(clave).id !== v.id) NA.cargadas.delete(clave);
   if(!NA.cargadas.has(clave)) NA.cargadas.set(clave, (async ()=>{
     const avance = avanceExtra || ((n, t) => showStatus(`Bajando la voz ${v.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || v.mb * 1e6) / 1e6)} MB (solo la primera vez; usa Wi-Fi).`, null, t ? n / t : null));
-    const [modelo, config] = await Promise.all([bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx', avance), bajarNA(PIPER + v.ruta + '/' + v.id + '.onnx.json', ()=>{})]);
+    const [modelo, config] = await Promise.all([bajarNA(urlModeloNA(v), avance), bajarNA(urlModeloNA(v) + '.json', ()=>{})]);
     NA.sr = await llamarNA('cargar', [v.id, modelo, config, idioma], [modelo, config], k);
     if(!$('#statusProg').hidden) hideStatus();
   })().catch(e => { if(NA.cargadas.get(clave)?.id === v.id) NA.cargadas.delete(clave); throw e; }));
@@ -1702,15 +1702,24 @@ async function abrirST(desde){
   ST.sb = ms.addSourceBuffer('audio/mpeg'); ST.sb.mode = 'sequence';
   ms.addEventListener('startstreaming', () => alimentarST());
   await llamarMP3('nuevo', {sr: ST.sr});
-  await agregarUnidadST(tok);
+  await agregarUnidadST(tok, primera);
   ST.alimentando = false;
 }
-async function agregarUnidadST(tok){
+/* ---------- «Mi voz»: empezar al instante con la voz base ---------- */
+// Ponerle tu timbre a una frase tarda más que escucharla (medido: 5,6 s por 4 s de audio en el procesador).
+// Para no esperar al tocar «Leer», las primeras frases suenan con la voz base (la que después recibe tu
+// timbre), avisando en pantalla, y apenas hay una frase con tu voz se sigue con ella (sin volver a la base).
+const arranqueMV = () => store.get('mvArranque', true);
+async function audioBaseST(i){
+  const s = flat[i], b = MV.base[s.l] || MV.base.es;
+  return {a: aEntero(await hablarBaseMV(textoNA(s), s.l, b)), hasta: i, base: true};
+}
+async function agregarUnidadST(tok, dado){
   const F = fuenteAU(), i = ST.sig;
-  const r = await F.audio(i);
+  const r = dado || await F.audio(i);
   if(!r) throw new Error('vacío');
   if(tok !== ST.tok) throw new Error('detenido');
-  F.usada(i);
+  if(!dado) F.usada(i);
   // una frase generada entera puede cubrir varios trozos: el tiempo de cada uno, según sus letras
   const {a, hasta} = r, sr = ST.sr, base = (ST.muestras + RETRASO_MP3) / sr, dur = a.length / sr;
   let letras = 0, acc = 0; for(let k = i; k <= hasta; k++) letras += flat[k].t.length;
@@ -1745,6 +1754,18 @@ async function alimentarST(){
     while(tok === ST.tok && playing && cargadoST() < CARGADO_SEG){
       if(ST.sig >= flat.length){ await terminarST(tok); break; }
       const F = fuenteAU();
+      if(esMiVoz() && MV.arranque){
+        if(F.lista(ST.sig)){
+          MV.arranque = false;
+          diag(`«Mi voz»: desde la frase ${ST.sig + 1}, con tu voz (antes, ${MV.fBase} con la voz base)`);
+          if(document.visibilityState === 'visible'){ showStatus('Desde aquí, con tu voz.'); setTimeout(() => { if($('#statusText').textContent === 'Desde aquí, con tu voz.') hideStatus(); }, 4000); }
+        } else {
+          if(cargadoST() > 1.5){ pedirMV(ST.sig + 1, 3); await dormir(200); continue; }   // la base cubre solo lo justo
+          await agregarUnidadST(tok, await audioBaseST(ST.sig)); MV.fBase++;
+          pedirMV(ST.sig, 3);                      // tu voz, para lo que viene después de esta frase
+          continue;
+        }
+      }
       if(!F.lista(ST.sig)){
         if(esMiVoz() && !store.get('vozSE')){ await terminarST(tok, 'sin preparar'); break; }
         if(esMiVoz()) pedirMV(ST.sig);   // pide varias frases: el motor trabaja en paralelo y la espera es la mitad
@@ -1809,7 +1830,9 @@ async function playST(){
   if(esMiVoz()){
     await discoMV();
     if(!store.get('vozSE')){ avisoSinPreparar(); openSheet(); return; }
-    pedirMV(i);                      // la generación parte antes de arrancar: la primera frase no espera sola
+    // tu voz parte antes de arrancar; si se empieza con la voz base, después de su primera frase (comparten
+    // el proceso de Piper: si no, la frase de la base esperaba en la fila detrás de las de tu voz)
+    if(!(arranqueMV() && !fuenteMV.lista(i))) pedirMV(i);
   }
   playing = true; setPlayIcon();
   const yo = ++MV.turno;
@@ -1819,14 +1842,20 @@ async function playST(){
       await discoNA();
       if(!NA.hechas.has(i)) showStatus('Preparando la voz…');
     } else if(esMiVoz()){
-      if(!fuenteMV.lista(i)) showStatus('Iniciando tu voz…');
-      // empezar con dos frases listas: mientras suena la primera se abre el segundo proceso de timbre, y sin
-      // este margen la lectura hacía una pausa justo después de la primera frase
-      if(i + 1 < flat.length && !fuenteMV.lista(i + 1)) await Promise.race([asegurarFraseMV(i + 1).catch(()=>{}), dormir(10000)]);
+      MV.arranque = arranqueMV() && !fuenteMV.lista(i); MV.fBase = 0;
+      if(MV.arranque){
+        await asegurarCfgMV();
+        showStatus(`Empieza con la voz base (${MV.base.es.nombre}) mientras se prepara la tuya; en unos segundos sigue con tu voz.`);
+        diag('«Mi voz»: empieza con la voz base mientras se prepara la tuya');
+      } else if(!fuenteMV.lista(i)){
+        showStatus('Iniciando tu voz…');
+        // sin la voz base: empezar con dos frases listas (si no, hay una pausa justo después de la primera)
+        if(i + 1 < flat.length && !fuenteMV.lista(i + 1)) await Promise.race([asegurarFraseMV(i + 1).catch(()=>{}), dormir(10000)]);
+      }
     }
     await abrirST(i);
     if(yo !== MV.turno || !playing) return;
-    hideStatus();
+    if(MV.arranque) pedirMV(i + 1, 3); else hideStatus();
     await audioVoz.play();
     generarAdelanteST();
     alimentarST();
@@ -1870,7 +1899,7 @@ function terminadoST(){
 
 function avisoSinPreparar(){
   if(!store.get('vozSE')){
-    avisoMiVoz('Todavía no hay una voz grabada: toca «Grabar mi voz» (o usa un audio grabado con Notas de Voz).', true);
+    avisoMiVoz(`Todavía no hay una voz grabada: toca «Grabar mi voz» (o usa un audio grabado con ${GRABADORA}).`, true);
     showStatus('Primero graba tu voz en el panel «Mi voz» para poder leer con ella.');
   } else {
     showStatus('Iniciando tu voz…');
@@ -2369,7 +2398,127 @@ $('#guiaProbar').onclick = async ()=>{
   finally{ btn.disabled = false; }
 };
 
-$('#recBtn').onclick = ()=> abrirGuia();
+/* ---------- Entrenar mi voz: grabar frases con su texto, exportarlas y usar el modelo entrenado ---------- */
+// La clonación al vuelo copia el timbre, no el acento ni el ritmo. Para eso hay que entrenar un modelo con tu
+// voz: aquí se graban ~230 frases (cada una se guarda solo en este teléfono, como WAV 22 050 Hz con su texto),
+// se exportan en un .zip para entrenar en el computador, y el modelo resultante (.onnx + .onnx.json) se carga
+// de vuelta como una voz más de «Natural» (lee tan rápido como esas).
+let FRASES_ENT = null;
+const ENT = {hechas: new Set(), seg: 0};
+const pad3 = i => String(i).padStart(3, '0');
+async function cargarEnt(){
+  if(!FRASES_ENT) FRASES_ENT = (await import('./voz/frases-entrenamiento.js')).FRASES_ENTRENAMIENTO;
+  const ks = await kv.keys('voz', 'ent:') || [];
+  ENT.hechas = new Set(ks.map(k => +k.slice(4)));
+  ENT.seg = store.get('entSeg', 0);
+}
+const sigEnt = desde => { for(let k = 0; k < FRASES_ENT.length; k++){ const i = (desde + k) % FRASES_ENT.length; if(!ENT.hechas.has(i)) return i; } return -1; };
+function pintarEnt(){
+  const n = ENT.hechas.size, t = FRASES_ENT ? FRASES_ENT.length : 230, min = ENT.seg / 60;
+  $('#guiaSimVal').textContent = `${n} de ${t}`;
+  $('#guiaSimBar').style.width = Math.round(n / t * 100) + '%';
+  $('#guiaSim').classList.toggle('lleno', n >= t);
+  $('#guiaSimNota').textContent = `${min < 1 ? 'Menos de 1' : Math.floor(min)} min de voz grabada (se recomiendan 15 o más). Puedes parar cuando quieras: lo grabado queda guardado.`;
+  const caja = $('#entEstado'); if(caja){
+    caja.textContent = n ? `${n} de ${t} frases grabadas (${Math.max(1, Math.round(min))} min).` + (n >= 150 ? ' Ya puedes exportarlas para entrenar.' : '') : 'Todavía no hay frases grabadas.';
+    $('#entBar').style.width = Math.round(n / t * 100) + '%';
+  }
+}
+// Deja solo la voz (con un margen de 0,25 s) y la lleva a 22 050 Hz, el formato con que se entrena.
+async function aWavEntrenamiento(d, sr){
+  let pico = 0; for(const v of d) pico = Math.max(pico, Math.abs(v));
+  const u = pico * 0.04; let i = 0, j = d.length - 1;
+  while(i < j && Math.abs(d[i]) < u) i++;
+  while(j > i && Math.abs(d[j]) < u) j--;
+  const m = Math.round(sr * 0.25), a = d.subarray(Math.max(0, i - m), Math.min(d.length, j + m));
+  const n = Math.ceil(a.length * 22050 / sr), oc = new OfflineAudioContext(1, n, 22050);
+  const buf = oc.createBuffer(1, a.length, sr); buf.copyToChannel(Float32Array.from(a), 0);
+  const src = oc.createBufferSource(); src.buffer = buf; src.connect(oc.destination); src.start();
+  const r = (await oc.startRendering()).getChannelData(0);
+  const g = pico > 0 ? 0.9 / pico : 1;
+  return {wav: wav16(r.map(v => v * g), 22050), seg: r.length / 22050};
+}
+async function guardarEnt(i, texto, d, sr){
+  const {wav, seg} = await aWavEntrenamiento(d, sr);
+  await kv.put('voz', 'ent:' + pad3(i), {texto, wav});
+  ENT.hechas.add(i); ENT.seg += seg; store.set('entSeg', ENT.seg);
+  if(GV.abierta) pintarEnt();
+}
+// .zip sin comprimir (los WAV casi no se comprimen): wav/ent-NNN.wav, metadata.csv (archivo|texto) y LEEME.txt
+function zipSinComprimir(archivos){
+  const crcT = new Uint32Array(256).map((_, n) => { let c = n; for(let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = b => { let c = 0xFFFFFFFF; for(const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  const enc = new TextEncoder(), partes = [], central = []; let off = 0;
+  for(const [nombre, datos] of archivos){
+    const nb = enc.encode(nombre), c = crc(datos);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint32(14, c, true);
+    h.setUint32(18, datos.length, true); h.setUint32(22, datos.length, true); h.setUint16(26, nb.length, true);
+    partes.push(new Uint8Array(h.buffer), nb, datos);
+    const ce = new DataView(new ArrayBuffer(46));
+    ce.setUint32(0, 0x02014b50, true); ce.setUint16(4, 20, true); ce.setUint16(6, 20, true); ce.setUint16(8, 0x0800, true);
+    ce.setUint32(16, c, true); ce.setUint32(20, datos.length, true); ce.setUint32(24, datos.length, true); ce.setUint16(28, nb.length, true); ce.setUint32(42, off, true);
+    central.push(new Uint8Array(ce.buffer), nb);
+    off += 30 + nb.length + datos.length;
+  }
+  const tc = central.reduce((x, b) => x + b.length, 0), fin = new DataView(new ArrayBuffer(22));
+  fin.setUint32(0, 0x06054b50, true); fin.setUint16(8, archivos.length, true); fin.setUint16(10, archivos.length, true); fin.setUint32(12, tc, true); fin.setUint32(16, off, true);
+  return new Blob([...partes, ...central, new Uint8Array(fin.buffer)], {type: 'application/zip'});
+}
+async function exportarEnt(){
+  const nota = $('#entNota');
+  await cargarEnt();
+  if(!ENT.hechas.size){ nota.textContent = 'Todavía no hay frases grabadas.'; return; }
+  nota.textContent = 'Armando el archivo…';
+  const enc = new TextEncoder(), archivos = []; let csv = '';
+  for(const i of [...ENT.hechas].sort((a, b) => a - b)){
+    const v = await kv.get('voz', 'ent:' + pad3(i)); if(!v) continue;
+    const nombre = `ent-${pad3(i)}.wav`;
+    archivos.push(['wav/' + nombre, new Uint8Array(await v.wav.arrayBuffer())]);
+    csv += `${nombre}|${v.texto}\n`;
+  }
+  archivos.push(['metadata.csv', enc.encode(csv)]);
+  archivos.push(['LEEME.txt', enc.encode('Grabaciones de tu voz hechas con LectorLibre (cada WAV con su texto en metadata.csv).\n' +
+    'Para entrenar tu voz en el Mac: deja este .zip en Descargas y abre «Entrenar mi voz.command» (en LectoraEstudio).\n' +
+    'Estas grabaciones son tuyas: no se subieron a ningún servidor.\n')]);
+  const fecha = new Date().toISOString().slice(0, 10);
+  const archivo = new File([zipSinComprimir(archivos)], `LectorLibre-mi-voz-${fecha}.zip`, {type: 'application/zip'});
+  try{
+    if(navigator.canShare && navigator.canShare({files: [archivo]})){ await navigator.share({files: [archivo], title: 'Grabaciones de mi voz'}); nota.textContent = 'Listo. Pásalo al computador (AirDrop, Archivos, cable…) para entrenar.'; return; }
+  }catch(e){ if(e && e.name === 'AbortError'){ nota.textContent = ''; return; } }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(archivo); a.download = archivo.name; document.body.appendChild(a); a.click(); a.remove();
+  nota.textContent = `Se descargó «${archivo.name}» (${Math.round(archivo.size / 1e6)} MB). Pásalo al computador para entrenar.`;
+}
+// El modelo entrenado (.onnx + .onnx.json) queda guardado en el teléfono y aparece como voz de «Natural».
+const URL_ENTRENADA = new URL('mi-voz-entrenada/', location.href).href;
+function vozEntrenadaNA(){
+  const m = store.get('vozEntrenada', null); if(!m) return null;
+  return {id: 'mi-voz-entrenada', nombre: 'Mi voz entrenada', mb: m.mb, modelo: URL_ENTRENADA + 'voz.onnx', config: URL_ENTRENADA + 'voz.onnx.json'};
+}
+async function usarVozEntrenada(files){
+  const nota = $('#entNota');
+  const onnx = [...files].find(f => /\.onnx$/i.test(f.name)), json = [...files].find(f => /\.json$/i.test(f.name));
+  if(!onnx || !json){ nota.textContent = 'Elige los dos archivos juntos: el .onnx y el .onnx.json que salieron del entrenamiento.'; return; }
+  let cfg;
+  try{ cfg = JSON.parse(await json.text()); }catch(e){ nota.textContent = 'El archivo .json no se pudo leer.'; return; }
+  if(!cfg.audio || !cfg.audio.sample_rate || !(cfg.espeak || cfg.phoneme_id_map)){ nota.textContent = 'Ese .json no parece de una voz Piper.'; return; }
+  const c = await caches.open('lectora-voces');
+  await c.put(URL_ENTRENADA + 'voz.onnx', new Response(onnx));
+  await c.put(URL_ENTRENADA + 'voz.onnx.json', new Response(json));
+  store.set('vozEntrenada', {mb: Math.round(onnx.size / 1e6), fecha: Date.now()});
+  VOCES_NA.es = VOCES_NA.es.filter(v => v.id !== 'mi-voz-entrenada'); VOCES_NA.es.unshift(vozEntrenadaNA());
+  store.set('na:es', 'mi-voz-entrenada');
+  soltarNA(); olvidarBloques();
+  diag('se cargó «Mi voz entrenada» (' + Math.round(onnx.size / 1e6) + ' MB)');
+  nota.textContent = 'Listo: «Mi voz entrenada» quedó como voz en español de «Natural». Se usa como cualquier voz natural, sin esperas.';
+  setModo('natural'); llenarNA();
+}
+
+$('#recBtn').onclick = ()=> abrirGuia('similitud');
+$('#entGrabar').onclick = ()=> abrirGuia('entrenar');
+$('#entExportar').onclick = exportarEnt;
+$('#entUsar').onclick = ()=> $('#entArchivos').click();
+$('#entArchivos').onchange = e => { const f = e.target.files; if(f && f.length) usarVozEntrenada(f).catch(err => $('#entNota').textContent = err.message || String(err)); e.target.value = ''; };
 $('#mvAcento').value = store.get('mvAcento', 'latino');
 $('#mvAcento').onchange = e => {
   if(playing && esMiVoz()) stop();
@@ -2420,6 +2569,7 @@ function setModo(m){
   $('#blackBtn').hidden = !doc || isAudioDoc() || m !== 'telefono';
   updateVoiceBtn();
   if(m === 'mivoz' && doc && !isAudioDoc()) discoMV().then(actualizarMV); else actualizarMV();
+  if(m === 'mivoz') cargarEnt().then(pintarEnt).catch(()=>{});
   if(m === 'natural' && doc && !isAudioDoc()) discoNA().then(actualizarNA); else actualizarNA();
 }
 document.querySelectorAll('.seg button').forEach(b => b.onclick = () => setModo(b.dataset.modo));
@@ -2536,7 +2686,7 @@ if('mediaSession' in navigator){
   // Si coincide con una interrupción, se espera y sigue sola; si no, es una pausa tuya.
   h('pause', ()=>{
     const interrupcion = sesionInterrumpida() || Date.now() - (MV.ultimaInterrupcion || 0) < 3000;
-    diag(`pausa pedida por el iPhone · sesión de audio: ${estadoSesion()}` + (MV.ultimoRelevo ? ` · ${Math.round((Date.now() - MV.ultimoRelevo) / 1000)} s desde el último bloque` : ''));
+    diag(`pausa pedida por ${SISTEMA} · sesión de audio: ${estadoSesion()}` + (MV.ultimoRelevo ? ` · ${Math.round((Date.now() - MV.ultimoRelevo) / 1000)} s desde el último bloque` : ''));
     if(usaAudio() && playing && interrupcion){ MV.interrumpido = Date.now(); diag('→ era una interrupción: espera y sigue sola'); reintentar(); return; }
     stop();
   });
