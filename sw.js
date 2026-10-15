@@ -1,5 +1,5 @@
 // Guarda la app en el teléfono para que abra sin internet.
-const CACHE = 'lectora-v48';                // la app: se renueva con cada versión
+const CACHE = 'lectora-v49';                // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo: sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
@@ -76,6 +76,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;   // fuentes y modelos externos: directo (vienen con CORS)
+  if (url.pathname.includes('/entrenador/')) return;   // el entrenador del computador: siempre directo del sitio (descargas)
   if (GRANDES.test(url.pathname)) {                  // modelos: el motor ya los guarda; aquí solo se aíslan
     e.respondWith(fetch(e.request).then(aislar));
     return;

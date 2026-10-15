@@ -18,6 +18,7 @@ a.b{display:inline-block; background:var(--accent); color:#fff; padding:11px 18p
 <body>
 <main>
 <h1>Lector<span>Libre</span>: entrenar tu voz</h1>
+<div class="card" id="esTelefono" hidden style="border-color:#C8102E"><b>Abre esta página en tu computador</b> (Mac o Windows), no en el teléfono: el entrenador corre en el computador. Desde el computador entra a <b>fpaulinaps-lang.github.io/lectora/entrenador</b>.</div>
 <p class="muted">Tu computador entrena un modelo que habla con tu voz, tu acento y tu ritmo. Todo pasa dentro de tu casa: las grabaciones van del teléfono al computador por tu Wi-Fi, sin cuentas ni servidores.</p>
 
 <div class="card">
@@ -43,5 +44,8 @@ a.b{display:inline-block; background:var(--accent); color:#fff; padding:11px 18p
 <p class="muted">Deja el computador encendido, enchufado y con esta ventana del entrenador abierta. Si se apaga a mitad, al volver a abrir el entrenador sigue donde quedó.</p>
 </div>
 </main>
+<script>
+if(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) document.getElementById('esTelefono').hidden = false;
+</script>
 </body>
 </html>
