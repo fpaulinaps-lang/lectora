@@ -1,8 +1,8 @@
 // Guarda la app en el teléfono para que abra sin internet.
-const CACHE = 'lectora-v49';                // la app: se renueva con cada versión
+const CACHE = 'lectora-v52';                // la app: se renueva con cada versión
 const EXTRA = 'lectora-archivos';           // lo que se guarda al usarlo: sobrevive a las versiones
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+  'voz/seguridad-biometrica.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 const GRANDES = /\.(onnx|f16|bin)$/;
 const ESPERA_RED = 4000;                    // con mala señal, no esperar más que esto antes de usar la copia guardada
 

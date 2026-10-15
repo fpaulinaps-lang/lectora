@@ -1,4 +1,5 @@
 // Lectora: biblioteca de PDFs que se leen en voz alta con la voz del teléfono, una voz natural o la tuya.
+import { BovedaBiometrica } from './voz/seguridad-biometrica.js';
 const $ = s => document.querySelector(s);
 const synth = window.speechSynthesis;
 const pdfjs = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
@@ -51,6 +52,14 @@ const PLAT = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform
 const GRABADORA = {ios: 'Notas de Voz', android: 'la Grabadora del teléfono', windows: 'la Grabadora de sonido de Windows', mac: 'Notas de Voz'}[PLAT] || 'una app de grabación';
 const SISTEMA = {ios: 'el iPhone', android: 'el teléfono', windows: 'Windows', mac: 'el Mac'}[PLAT] || 'el sistema';
 
+/* ---------- Interruptor de seguridad ---------- */
+// La «voz entrenada» (la bóveda biométrica) y el Entrenador del computador quedan DESACTIVADOS a
+// propósito: el cifrado se podía revertir sin Face ID (la llave se derivaba del propio registro) y el
+// entrenador quedaba expuesto en la red con un código de 6 dígitos sin límite de intentos.
+// Con esto en false nada de eso se ejecuta ni sale a la red, y sus datos quedan en cuarentena (SEGURIDAD.md).
+// Reactivar SOLO después de rediseñar la protección.
+const VOZ_SENSIBLE_ACTIVA = false;
+
 /* ---------- Diagnóstico ---------- */
 // Lo que pasa mientras se escucha fuera de la app (no se puede ver de otra forma en el iPhone). Se muestra
 // en «Voz» › Diagnóstico, para mandar una captura si algo falla. Solo queda en este teléfono.
@@ -94,9 +103,48 @@ const kv = {
   get: (st, k) => tx(st,'readonly', s=>s.get(k)),
   put: (st, k, v) => tx(st,'readwrite', s=>s.put(v,k)),
   del: (st, k) => tx(st,'readwrite', s=>s.delete(k)),
-  keys: (st, prefix) => tx(st,'readonly', s=>s.getAllKeys(IDBKeyRange.bound(prefix, prefix + '￿'))),
+  keys: (st, prefix) => tx(st,'readonly', s=> prefix ? s.getAllKeys(IDBKeyRange.bound(prefix, prefix + '￿')) : s.getAllKeys()),
   delPrefix: (st, prefix) => tx(st,'readwrite', s=>s.delete(IDBKeyRange.bound(prefix, prefix + '￿'))),
 };
+
+// BORRADO de los datos de la función desactivada (pedido del usuario: no dejarlos guardados).
+// Se sobrescribe cada registro antes de borrarlo (mejor esfuerzo) y se limpian también los restos que
+// hubieran quedado de la cuarentena anterior. Nada de esto se puede recuperar después.
+async function borrarDatosDeVoz(){
+  if(VOZ_SENSIBLE_ACTIVA) return 0;
+  if(store.get('voz_datos_borrados_v1', false)) return 0;
+  let n = 0;
+  const borrar = async k => { try{
+    if(await kv.get('voz', k) == null) return;
+    try{ await kv.put('voz', k, new Uint8Array(8192)); }catch(e){}     // sobrescritura antes de borrar
+    await kv.del('voz', k); n++;
+  }catch(e){} };
+  try{
+    for(const pref of ['ent:', 'cuarentena:ent:']) for(const k of await kv.keys('voz', pref) || []) await borrar(k);
+    for(const k of ['modelo_cifrado', 'boveda_meta', 'cuarentena:modelo_cifrado', 'cuarentena:boveda_meta',
+                    'grabacion', 'comparar', 'huella', 'muestra']) await borrar(k);
+  }catch(e){}
+  for(const k of ['entrenador', 'cuarentena:entrenador', 'vozEntrenada', 'cuarentena:vozEntrenada',
+                  'vozSE', 'vozHash', 'vozBase', 'entSeg', 'vozGuia', 'pcEpocas', 'voz_purga_segura_v1', 'voz_cuarentena_v1']){
+    try{ if(store.get(k, null) !== null){ store.del(k); n++; } }catch(e){}
+  }
+  try{                                                                 // modelos sin cifrar en la caché
+    const c = await caches.open('lectora-voces');
+    for(const r of await c.keys()) if(/mi-voz|voz\.onnx|lectoravoz/i.test(r.url)){ await c.delete(r); n++; }
+  }catch(e){}
+  store.set('voz_datos_borrados_v1', Date.now());
+  return n;
+}
+// La purga destructiva de la versión anterior queda ANULADA (borraba datos sin avisar ni preguntar).
+async function ejecutarPurgaInicial(){
+  const n = await borrarDatosDeVoz();
+  if(n){
+    diag('Datos de voz borrados por seguridad (' + n + ' registros). Función desactivada mientras se rediseña.');
+    const av = $('#entAviso'); if(av){ av.hidden = false;
+      av.textContent = '🔒 Se borraron los datos de la voz entrenada (' + n + ' registros) y la función quedó desactivada mientras se rediseña su seguridad.'; }
+  }
+}
+ejecutarPurgaInicial().catch(()=>{});
 
 /* ---------- Portadas ---------- */
 // Se guardan chicas (unos 150×200 px en JPEG): se ven como miniatura al lado del título.
@@ -264,7 +312,7 @@ const VOCES_NA = {
 if(store.get('na:es') === 'es_MX-ald-medium'){ store.set('na:es', 'es_MX-claude-high'); }
 // dónde está el modelo: las voces de Piper en Hugging Face; «Mi voz entrenada», guardada en el teléfono
 const urlModeloNA = v => v.modelo || PIPER + v.ruta + '/' + v.id + '.onnx';
-{ const m = store.get('vozEntrenada', null); if(m) VOCES_NA.es.unshift({id: 'mi-voz-entrenada', nombre: 'Mi voz entrenada', mb: m.mb, modelo: new URL('mi-voz-entrenada/voz.onnx', location.href).href}); }
+if(VOZ_SENSIBLE_ACTIVA){ const m = store.get('vozEntrenada', null); if(m) VOCES_NA.es.unshift({id: 'mi-voz-entrenada', nombre: 'Mi voz entrenada', mb: m.mb, modelo: new URL('mi-voz-entrenada/voz.onnx', location.href).href}); }
 const vozNA = l => { const v = VOCES_NA[l === 'en' ? 'en' : 'es']; return v.find(x => x.id === store.get('na:' + (l === 'en' ? 'en' : 'es'))) || v[0]; };
 
 /* ---------- Biblioteca ---------- */
@@ -1000,27 +1048,35 @@ async function retomarPreparacion(){
 }
 
 function actualizarMV(){
-  const tiene = !!store.get('vozSE');
-  $('#recEmpty').hidden = tiene; $('#recDone').hidden = !tiene;
-  $('#recBtn').textContent = tiene ? '● Grabar de nuevo' : '● Grabar mi voz';
-  $('#recPlay').hidden = !tiene; $('#mvTest').hidden = !tiene; $('#mvComparar').hidden = !tiene;
-  const g = store.get('vozGuia', null), sg = g && g.sims && g.sims.length ? g.sims.slice(-3).reduce((x, y) => x + y, 0) / Math.min(3, g.sims.length) : null;
-  $('#recSim').hidden = sg == null;
-  if(sg != null) $('#recSim').textContent = `Similitud de tu voz clonada: ${Math.round(sg * 100)}%` + (g.completo ? ' (la máxima posible)' : ` · toca «Grabar mi voz» para seguir mejorándola`);
-  $('#mvPrepBox').hidden = !tiene || !doc || isAudioDoc();
+  // Con la función de voz entrenada desactivada, «Mi voz» es otra vez la grabación local del teléfono.
+  const tiene = VOZ_SENSIBLE_ACTIVA ? !!store.get('vozEntrenada') : !!store.get('vozSE');
+  if($('#recEmpty')) $('#recEmpty').hidden = tiene;
+  if($('#recDone')) $('#recDone').hidden = !tiene;
+  if($('#recBtn')){
+    $('#recBtn').textContent = tiene ? '● Grabar de nuevo' : '● Grabar mi voz';
+    $('#recBtn').disabled = false;
+  }
+  if(typeof actualizarBovedaUI === 'function') actualizarBovedaUI();
+  if($('#recPlay')) $('#recPlay').hidden = !tiene;
+  if($('#mvTest')) $('#mvTest').hidden = !tiene;
+  if($('#mvComparar')) $('#mvComparar').hidden = !tiene;
+  if($('#recSim')) $('#recSim').hidden = true;
+  if($('#mvPrepBox')) $('#mvPrepBox').hidden = !tiene || !doc || isAudioDoc();
   if(!doc || isAudioDoc() || !tiene) return;
   const conTexto = doc.pages.map((_, p) => p).filter(p => frasesDePagina(p).length);
   const listas = conTexto.filter(paginaLista).length;
-  $('#mvBar').style.width = Math.round(listas / Math.max(1, conTexto.length) * 100) + '%';
+  if($('#mvBar')) $('#mvBar').style.width = Math.round(listas / Math.max(1, conTexto.length) * 100) + '%';
   let t = `${listas} de ${conTexto.length} páginas listas con tu voz.`;
   if(MV.prep) t += MV.falta != null ? ` Pre-generando… faltan ~${fmtTime(MV.falta)}. Puedes cancelar cuando quieras.` : ' Pre-generando…';
   else if(listas < conTexto.length) t += ' Toca «Leer» (▶) para escuchar al vuelo al instante, o pre-genera todo el libro.';
   else t += ' Audio completo listo: guardado en tu teléfono.';
-  $('#mvEstado').textContent = t;
-  $('#mvPrep').textContent = MV.prep ? 'Detener' : (listas ? (listas === conTexto.length ? 'Re-generar libro completo' : 'Seguir pre-generando') : 'Pre-generar con mi voz');
-  $('#mvPrep').hidden = false;
+  if($('#mvEstado')) $('#mvEstado').textContent = t;
+  if($('#mvPrep')){
+    $('#mvPrep').textContent = MV.prep ? 'Detener' : (listas ? (listas === conTexto.length ? 'Re-generar libro completo' : 'Seguir pre-generando') : 'Pre-generar con mi voz');
+    $('#mvPrep').hidden = false;
+  }
 }
-$('#mvPrep').onclick = prepararMV;
+if($('#mvPrep')) $('#mvPrep').onclick = prepararMV;
 
 /* ================= Voz natural (Piper), generada mientras escuchas ================= */
 // Voces libres de Piper (licencia MIT, https://github.com/rhasspy/piper): suenan como un narrador, se generan
@@ -1100,8 +1156,28 @@ function cargarModeloNA(v, idioma, k = 0, avanceExtra){
   // otra voz del mismo idioma: el proceso suelta la anterior al cargar esta
   if(NA.cargadas.has(clave) && NA.cargadas.get(clave).id !== v.id) NA.cargadas.delete(clave);
   if(!NA.cargadas.has(clave)) NA.cargadas.set(clave, (async ()=>{
-    const avance = avanceExtra || ((n, t) => showStatus(`Bajando la voz ${v.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || v.mb * 1e6) / 1e6)} MB (solo la primera vez; usa Wi-Fi).`, null, t ? n / t : null));
-    const [modelo, config] = await Promise.all([bajarNA(urlModeloNA(v), avance), bajarNA(urlModeloNA(v) + '.json', ()=>{})]);
+    let modelo, config;
+    if(v.id === 'mi-voz-entrenada'){
+      if(!VOZ_SENSIBLE_ACTIVA) throw new Error('La voz entrenada está desactivada por seguridad (en revisión). Nada de sus datos se lee ni sale de este teléfono.');
+      const cifrado = await kv.get('voz', 'modelo_cifrado');
+      const meta = await kv.get('voz', 'boveda_meta');
+      if(!cifrado || !meta) throw new Error('No se encontró tu voz cifrada en la bóveda de este dispositivo.');
+      showStatus('Verifica tu identidad con ' + BovedaBiometrica.nombreBiometria() + ' para activar tu voz…');
+      let cryptoKey;
+      try {
+        cryptoKey = await BovedaBiometrica.desbloquear(meta);
+      } catch(err) {
+        hideStatus();
+        throw err;
+      }
+      showStatus('Descifrando modelo en memoria segura RAM…');
+      const paquete = await BovedaBiometrica.descifrar(cifrado, cryptoKey);
+      const dec = BovedaBiometrica.desempaquetar(paquete);
+      modelo = dec.onnx; config = dec.json;
+    } else {
+      const avance = avanceExtra || ((n, t) => showStatus(`Bajando la voz ${v.nombre}: ${Math.round(n / 1e6)} de ${Math.round((t || v.mb * 1e6) / 1e6)} MB (solo la primera vez; usa Wi-Fi).`, null, t ? n / t : null));
+      [modelo, config] = await Promise.all([bajarNA(urlModeloNA(v), avance), bajarNA(urlModeloNA(v) + '.json', ()=>{})]);
+    }
     NA.sr = await llamarNA('cargar', [v.id, modelo, config, idioma], [modelo, config], k);
     if(!$('#statusProg').hidden) hideStatus();
   })().catch(e => { if(NA.cargadas.get(clave)?.id === v.id) NA.cargadas.delete(clave); throw e; }));
@@ -1329,8 +1405,8 @@ function precalentarNA(yLeer, espera){
     NA.seguir = false;
     if(!esNatural() || !flat.length || (playing && !yLeer)) return;
     try{
-      const l = flat[idx].l, v = vozNA(l), c = await caches.open('lectora-voces');
-      if(!(await c.match(urlModeloNA(v)))){ if(yLeer) play(); return; }
+      const tieneModelo = v.id === 'mi-voz-entrenada' ? !!(await kv.get('voz', 'modelo_cifrado')) : !!(await c.match(urlModeloNA(v)));
+      if(!tieneModelo){ if(yLeer) play(); return; }
       await discoNA();
       if(yLeer){ play(); return; }
       await cargarVozNA(l, 0);
@@ -1724,7 +1800,9 @@ async function abrirST(desde){
 // Ponerle tu timbre a una frase tarda más que escucharla (medido: 5,6 s por 4 s de audio en el procesador).
 // Para no esperar al tocar «Leer», las primeras frases suenan con la voz base (la que después recibe tu
 // timbre), avisando en pantalla, y apenas hay una frase con tu voz se sigue con ella (sin volver a la base).
-const arranqueMV = () => store.get('mvArranque', true);
+// Arrancar con la voz base mientras se prepara la tuya solo tiene sentido si HAY una voz tuya grabada.
+// Si no (por ejemplo después del borrado de seguridad), se avisa que hay que grabar.
+const arranqueMV = () => !!store.get('vozSE') && store.get('mvArranque', true);
 async function audioBaseST(i){
   const s = flat[i], b = MV.base[s.l] || MV.base.es;
   return {a: aEntero(await hablarBaseMV(textoNA(s), s.l, b)), hasta: i, base: true};
@@ -2216,13 +2294,13 @@ function mostrarFrase(){
   $('#guiaGrabar').textContent = '● Grabar'; $('#guiaGrabar').classList.remove('on'); $('#guiaGrabar').disabled = false;
   $('#guiaNivel').style.width = '0%';
   pintarSimilitud();
+}function avisoGrabacionDesactivada(){
+  showStatus('La grabación y entrenamiento de voz están pausados preventivamente para proteger tus datos biométricos contra ciberataques.', 'err');
 }
 
 async function abrirGuia(modo = 'similitud'){
-  GV.modo = modo;
-  GV.abierta = true;
-  $('#guia').hidden = false;
-  $('#guiaAviso').hidden = true;
+  avisoGrabacionDesactivada();
+  return;
   $('#guiaTit').textContent = modo === 'entrenar' ? 'Entrenar tu voz' : 'Graba tu voz';
   $('#guiaPasosSim').hidden = modo === 'entrenar'; $('#guiaPasosEnt').hidden = modo !== 'entrenar';
   $('#guiaSim .fila span').textContent = modo === 'entrenar' ? 'Frases grabadas' : 'Similitud con tu voz';
@@ -2422,8 +2500,8 @@ async function compararVoz(nota, btn){
   }catch(e){ nota.textContent = 'No pude comparar: ' + (e.message || e); }
   finally{ btn.disabled = false; }
 }
-$('#guiaComparar').onclick = ()=> compararVoz($('#guiaFinNota'), $('#guiaComparar'));
-$('#mvComparar').onclick = ()=> compararVoz($('#mvTestNote'), $('#mvComparar'));
+if($('#guiaComparar')) $('#guiaComparar').onclick = ()=> compararVoz($('#guiaFinNota'), $('#guiaComparar'));
+if($('#mvComparar')) $('#mvComparar').onclick = ()=> compararVoz($('#mvTestNote'), $('#mvComparar'));
 $('#guiaProbar').onclick = async ()=>{
   const btn = $('#guiaProbar'); btn.disabled = true;
   const prueba = new Audio(); prueba.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; prueba.play().catch(()=>{});
@@ -2532,167 +2610,209 @@ async function exportarEnt(){
   const a = document.createElement('a'); a.href = URL.createObjectURL(archivo); a.download = archivo.name; document.body.appendChild(a); a.click(); a.remove();
   nota.textContent = `Se descargó «${archivo.name}» (${Math.round(archivo.size / 1e6)} MB). Pásalo al computador para entrenar.`;
 }
-// El modelo entrenado (.onnx + .onnx.json) queda guardado en el teléfono y aparece como voz de «Natural».
-const URL_ENTRENADA = new URL('mi-voz-entrenada/', location.href).href;
+// El modelo entrenado quedaba en el teléfono y aparecía como voz de «Natural». Estaba definida DOS veces
+// (error de sintaxis que impedía cargar la app). Ahora hay una sola y está apagada.
 function vozEntrenadaNA(){
+  if(!VOZ_SENSIBLE_ACTIVA) return null;
   const m = store.get('vozEntrenada', null); if(!m) return null;
-  return {id: 'mi-voz-entrenada', nombre: 'Mi voz entrenada', mb: m.mb, modelo: URL_ENTRENADA + 'voz.onnx', config: URL_ENTRENADA + 'voz.onnx.json'};
-}
-// Guarda el modelo en el teléfono y lo agrega como voz de «Natural» (sin cambiar lo que estés escuchando).
-async function instalarVozEntrenada(onnx, json, extra){
-  const cfg = JSON.parse(await json.text());
-  if(!cfg.audio || !cfg.audio.sample_rate || !(cfg.espeak || cfg.phoneme_id_map)) throw new Error('Ese .json no parece de una voz Piper.');
-  const c = await caches.open('lectora-voces');
-  await c.put(URL_ENTRENADA + 'voz.onnx', new Response(onnx));
-  await c.put(URL_ENTRENADA + 'voz.onnx.json', new Response(json));
-  store.set('vozEntrenada', {mb: Math.round(onnx.size / 1e6), fecha: Date.now(), ...extra});
-  VOCES_NA.es = VOCES_NA.es.filter(v => v.id !== 'mi-voz-entrenada'); VOCES_NA.es.unshift(vozEntrenadaNA());
-  // si esa voz estaba cargada, se suelta para que la próxima lectura use la nueva
-  if(vozNA('es').id === 'mi-voz-entrenada' && !playing){ soltarNA(); olvidarBloques(); }
-  if(!$('#scrim').hidden) llenarNA();
-}
-async function usarVozEntrenada(files){
-  const nota = $('#entNota');
-  const onnx = [...files].find(f => /\.onnx$/i.test(f.name)), json = [...files].find(f => /\.json$/i.test(f.name));
-  if(!onnx || !json){ nota.textContent = 'Elige los dos archivos juntos: el .onnx y el .onnx.json que salieron del entrenamiento.'; return; }
-  let cfg;
-  try{ cfg = JSON.parse(await json.text()); }catch(e){ nota.textContent = 'El archivo .json no se pudo leer.'; return; }
-  if(!cfg.audio || !cfg.audio.sample_rate || !(cfg.espeak || cfg.phoneme_id_map)){ nota.textContent = 'Ese .json no parece de una voz Piper.'; return; }
-  await instalarVozEntrenada(onnx, json, {});
-  store.set('na:es', 'mi-voz-entrenada');
-  if(playing) stop();
-  diag('se cargó «Mi voz entrenada» (' + Math.round(onnx.size / 1e6) + ' MB)');
-  nota.textContent = 'Listo: «Mi voz entrenada» quedó como voz en español de «Natural». Se usa como cualquier voz natural, sin esperas.';
-  setModo('natural'); llenarNA();
+  return {id: 'mi-voz-entrenada', nombre: 'Mi voz entrenada (🔒 Face ID / Huella)', mb: m.mb, cifrado: true};
 }
 
-$('#recBtn').onclick = ()=> abrirGuia('similitud');
-$('#entGrabar').onclick = ()=> abrirGuia('entrenar');
-$('#entExportar').onclick = exportarEnt;
-$('#entUsar').onclick = ()=> $('#entArchivos').click();
-/* ---------- Entrenar en mi computador (por el Wi-Fi de la casa) ---------- */
-// El teléfono no puede entrenar (haría falta días), así que se lo encarga al computador de la casa (Mac o
-// Windows) donde corre el «Entrenador de LectorLibre»: se le mandan las grabaciones por el Wi-Fi, entrena por
-// detrás (~4 h) y, cuando termina, la app baja la voz sola. Mientras tanto la app se usa normal con las otras
-// voces: solo pregunta de vez en cuando cómo va. La conexión es https (la app viene de https) con el permiso
-// que el computador ofrece en http://<dirección>:8766, y un código de 6 números para que nadie más la use.
-const PC = {timer: null, bajando: false, ultimo: null};
-const pcConf = () => store.get('entrenador', null);
-const pcLimpia = d => (d || '').trim().replace(/^https?:\/\//i, '').replace(/[:/].*$/, '').replace(/[^0-9a-zA-Z.\-]/g, '');
-async function pcPedir(ruta, opts = {}){
-  const c = pcConf(); if(!c) throw new Error('Primero conecta tu computador.');
-  let r;
-  try{ r = await fetch(`https://${c.dir}:8765${ruta}`, {...opts, headers: {'X-Clave': c.codigo, ...(opts.headers || {})}}); }
-  catch(e){ throw Object.assign(new Error('sin conexión'), {red: true}); }
-  if(r.status === 403) throw new Error('El código no coincide con el que muestra el entrenador del computador.');
-  if(!r.ok){ let m = ''; try{ m = (await r.json()).error; }catch(e){} throw new Error(m || 'error ' + r.status); }
-  return r;
-}
-function pcEstado(txt, conEnlace){
-  const el = $('#pcEstado'), c = pcConf();
-  el.textContent = txt;
-  if(conEnlace && c){
-    const a = document.createElement('a'); a.href = `http://${c.dir}:8766`; a.target = '_blank'; a.rel = 'noopener';
-    a.textContent = ` Abrir http://${c.dir}:8766 para confiar en el computador`; el.appendChild(a);
-  }
-}
-function pcAyuda(){
-  return 'No pude conectar con el computador. Revisa que el entrenador esté abierto allá, que el teléfono esté en el mismo Wi-Fi y, la primera vez, abre esta dirección en el navegador del teléfono y sigue los pasos para confiar en el computador:';
-}
-async function pcConectar(){
-  const dir = pcLimpia($('#pcDir').value), codigo = $('#pcCodigo').value.replace(/\D/g, '');
-  if(!dir || codigo.length !== 6){ pcEstado('Escribe la dirección y el código de 6 números que muestra el entrenador en el computador.'); return; }
-  store.set('entrenador', {dir, codigo});
-  pcEstado('Conectando…');
-  try{ await pcPedir('/estado'); diag('conectado con el entrenador del computador (' + dir + ')'); await pcRevisar(true); }
-  catch(e){ e.red ? pcEstado(pcAyuda(), true) : pcEstado(e.message); }
-}
-async function pcEntrenar(){
-  await cargarEnt();
-  if(ENT.hechas.size < 30){ pcEstado(`Graba al menos 30 frases (llevas ${ENT.hechas.size}); lo ideal son 150 o más.`); return; }
-  const c = pcConf(); if(!c){ pcEstado('Primero conecta tu computador.'); return; }
-  pcEstado('Preparando tus grabaciones…');
-  const zip = await armarZipEnt();
-  // XMLHttpRequest: es la única forma de ver el avance de una subida
-  await new Promise((res, rej) => {
-    const x = new XMLHttpRequest();
-    x.open('POST', `https://${c.dir}:8765/entrenar?epocas=${store.get('pcEpocas', 70)}`);   // vueltas: 70 ≈ 4 h con 230 frases
-    x.setRequestHeader('X-Clave', c.codigo);
-    x.upload.onprogress = e => { if(e.total) pcEstado(`Mandando tus grabaciones al computador: ${Math.round(e.loaded / e.total * 100)}%`); };
-    x.onload = () => x.status === 200 ? res() : rej(new Error((() => { try{ return JSON.parse(x.responseText).error; }catch(e){ return 'error ' + x.status; } })()));
-    x.onerror = () => rej(Object.assign(new Error('sin conexión'), {red: true}));
-    x.send(zip);
-  }).then(() => { diag(`grabaciones enviadas al computador (${ENT.hechas.size} frases)`); pcRevisar(true); })
-    .catch(e => e.red ? pcEstado(pcAyuda(), true) : pcEstado(e.message));
-}
-// Pregunta cómo va. Con la hoja de voz abierta, cada 10 s; si no, cada 3 min mientras entrena; nada si no hay nada que esperar.
-async function pcRevisar(pantalla){
-  clearTimeout(PC.timer);
-  const c = pcConf(); if(!c) return;
-  let e;
-  try{ e = await (await pcPedir('/estado')).json(); }
-  catch(err){
-    if(pantalla) err.red ? pcEstado(pcAyuda(), true) : pcEstado(err.message);
-    if(PC.ultimo && PC.ultimo.estado === 'entrenando') PC.timer = setTimeout(pcRevisar, 3 * 60 * 1000);   // el computador puede volver
+function actualizarBovedaUI(){
+  if(!VOZ_SENSIBLE_ACTIVA){
+    // No se usa nada de esto: se oculta y se explica. Los datos siguen guardados, en cuarentena.
+    for(const sel of ['#entBox', '#entTren']){ const el = $(sel); if(el) el.hidden = true; }
+    const av = $('#entAviso');
+    if(av){
+      av.hidden = false;
+      av.textContent = '🔒 La voz entrenada y la conexión con el Entrenador están desactivadas mientras se rediseña su seguridad. ' +
+        'Tus datos quedaron guardados en cuarentena (no se borraron) y nada de esto se ejecuta ni sale a la red.';
+    }
     return;
   }
-  PC.ultimo = e;
-  const visible = !$('#scrim').hidden && modo === 'mivoz';
-  $('#pcBar').style.width = Math.round((e.progreso || 0) * 100) + '%';
-  $('#pcEntrenar').hidden = e.estado === 'entrenando'; $('#pcCancelar').hidden = e.estado !== 'entrenando';
-  const yaTengo = (store.get('vozEntrenada', null) || {}).desdePC === (e.modelo && e.modelo.fecha);
-  if(e.estado === 'entrenando'){
-    pcEstado(`Entrenando en tu computador: ${Math.round(e.progreso * 100)}% · ${e.mensaje}` + (e.restante_min ? ` · faltan ~${fmtTime(e.restante_min * 60)}` : '') + '. Puedes seguir usando la app con las otras voces.');
-    PC.timer = setTimeout(pcRevisar, visible ? 10000 : 3 * 60 * 1000);
-  } else if(e.estado === 'listo' && e.modelo && !yaTengo){
-    pcBajar(e.modelo);
-  } else if(e.estado === 'listo'){
-    pcEstado('Conectado. Tu voz entrenada ya está en este teléfono (en «Natural» › «Mi voz entrenada»). Puedes volver a entrenar con más frases cuando quieras.');
-  } else if(e.estado === 'error'){
-    pcEstado('El entrenamiento falló en el computador: ' + e.mensaje);
-  } else {
-    pcEstado('Conectado con tu computador. Cuando tengas tus frases grabadas, toca «Entrenar ahora».');
+  const tiene = !!store.get('vozEntrenada');
+  const btnBorrar = $('#btnBorrarVozBio');
+  if(btnBorrar) btnBorrar.hidden = !tiene;
+  const nota = $('#entNota');
+  if(nota && tiene && !nota.textContent){
+    nota.textContent = '🔒 Voz protegida con ' + BovedaBiometrica.nombreBiometria() + ' (AES-256-GCM). Lista para reproducir.';
   }
 }
-async function pcBajar(modelo){
-  if(PC.bajando) return; PC.bajando = true;
-  try{
-    pcEstado('Tu voz está lista: bajándola del computador…');
-    const r = await pcPedir('/modelo.onnx');
-    const total = +r.headers.get('Content-Length') || 0, partes = []; let n = 0;
-    const lector = r.body.getReader();
-    for(;;){ const {done, value} = await lector.read(); if(done) break; partes.push(value); n += value.length; if(total) pcEstado(`Bajando tu voz del computador: ${Math.round(n / total * 100)}%`); }
-    const onnx = new Blob(partes), json = await (await pcPedir('/modelo.onnx.json')).blob();
-    await instalarVozEntrenada(onnx, json, {desdePC: modelo.fecha});
-    pcEstado('¡Lista! Tu voz entrenada quedó en este teléfono: en «Natural», voz en español «Mi voz entrenada».');
-    // aviso, sin interrumpir lo que estés escuchando
-    showStatus('Tu voz entrenada está lista.', null, null, 'Escucharla', ()=>{ hideStatus(); if(playing) stop(); store.set('na:es', 'mi-voz-entrenada'); setModo('natural'); play(); });
-    diag('voz entrenada bajada del computador (' + Math.round(onnx.size / 1e6) + ' MB)');
-  }catch(e){ e.red ? pcEstado(pcAyuda(), true) : pcEstado('No pude bajar tu voz: ' + e.message); }
-  finally{ PC.bajando = false; }
+
+async function usarVozEntrenada(files){
+  const nota = $('#entNota');
+  if(!VOZ_SENSIBLE_ACTIVA){
+    nota.textContent = 'Esta función está desactivada por seguridad mientras se rediseña. No se importó nada.';
+    return;
+  }
+  nota.textContent = 'Procesando paquete de voz…';
+  let onnxBuffer = null, jsonBuffer = null;
+
+  try {
+    const lista = [...files];
+    const zipFile = lista.find(f => /\.(lectoravoz|zip)$/i.test(f.name));
+
+    if(zipFile){
+      nota.textContent = 'Leyendo paquete «' + zipFile.name + '»…';
+      const z = await readZipEntries(zipFile);
+      const onnxEnt = Object.values(z).find(e => /\.onnx$/i.test(e.name));
+      const jsonEnt = Object.values(z).find(e => /\.json$/i.test(e.name) && !e.name.includes('metadata'));
+      if(!onnxEnt || !jsonEnt) throw new Error('El paquete no contiene voz.onnx y su configuración .json.');
+      onnxBuffer = await leerZip(onnxEnt);
+      jsonBuffer = await leerZip(jsonEnt);
+    } else {
+      const onnxF = lista.find(f => /\.onnx$/i.test(f.name));
+      const jsonF = lista.find(f => /\.json$/i.test(f.name));
+      if(!onnxF || !jsonF){
+        nota.textContent = 'Elige el archivo «mi-voz.lectoravoz» o los dos archivos .onnx y .onnx.json juntos.';
+        return;
+      }
+      onnxBuffer = await onnxF.arrayBuffer();
+      jsonBuffer = await jsonF.arrayBuffer();
+    }
+
+    const cfg = JSON.parse(new TextDecoder().decode(jsonBuffer));
+    if(!cfg.audio || !cfg.audio.sample_rate || !(cfg.espeak || cfg.phoneme_id_map)){
+      throw new Error('Ese archivo .json no parece de una voz Piper.');
+    }
+
+    // Registro biométrico de hardware (Face ID / Touch ID / Huella)
+    const bioDisp = await BovedaBiometrica.disponible();
+    if(!bioDisp){
+      throw new Error('Para proteger tu voz contra extracción y ciberataques, este dispositivo debe contar con ' + BovedaBiometrica.nombreBiometria() + ' activo. Configúralo en los Ajustes del sistema.');
+    }
+
+    nota.textContent = 'Verifica tu identidad con ' + BovedaBiometrica.nombreBiometria() + ' para vincular y cifrar tu voz…';
+    const { meta, cryptoKey } = await BovedaBiometrica.registrar('Mi voz');
+
+    nota.textContent = 'Cifrando modelo en reposo con AES-256-GCM…';
+    const paquete = BovedaBiometrica.empaquetar(onnxBuffer, jsonBuffer);
+    const cifrado = await BovedaBiometrica.cifrar(paquete, cryptoKey);
+
+    // Guardar estrictamente cifrado en IndexedDB
+    await kv.put('voz', 'modelo_cifrado', cifrado);
+    await kv.put('voz', 'boveda_meta', meta);
+
+    const mb = Math.round(onnxBuffer.byteLength / 1e6);
+    store.set('vozEntrenada', {mb, fecha: Date.now(), cifrado: true});
+    VOCES_NA.es = VOCES_NA.es.filter(v => v.id !== 'mi-voz-entrenada');
+    VOCES_NA.es.unshift(vozEntrenadaNA());
+
+    if(vozNA('es').id === 'mi-voz-entrenada' && !playing){ soltarNA(); olvidarBloques(); }
+    store.set('na:es', 'mi-voz-entrenada');
+    if(playing) stop();
+
+    actualizarBovedaUI();
+    diag('Mi voz entrenada cifrada y vinculada a hardware (' + mb + ' MB)');
+    nota.textContent = '¡Listo! Tu voz quedó cifrada con AES-256 y protegida por ' + BovedaBiometrica.nombreBiometria() + '. Al leer, se descifrará únicamente en RAM.';
+    setModo('natural'); llenarNA();
+  } catch(err) {
+    nota.textContent = err.message || String(err);
+    console.error('Error importando voz:', err);
+  }
 }
-async function pcCancelar(){
-  try{ await pcPedir('/cancelar', {method: 'POST'}); pcEstado('Entrenamiento cancelado.'); }catch(e){ pcEstado(e.message); }
-  setTimeout(() => pcRevisar(true), 1000);
+
+// Botones de la Bóveda Biométrica
+const btnImpBio = $('#btnImportarBio');
+if(btnImpBio) btnImpBio.onclick = () => $('#entArchivos').click();
+
+const btnBorrarBio = $('#btnBorrarVozBio');
+if(btnBorrarBio){
+  btnBorrarBio.onclick = async () => {
+    if(!confirm('¿Destruir tu voz entrenada? Se sobrescribirá 3 veces con ruido criptográfico y se eliminarán todas las claves de este dispositivo.')) return;
+    await BovedaBiometrica.autocorromper('Usuario solicitó destrucción voluntaria');
+    VOCES_NA.es = VOCES_NA.es.filter(v => v.id !== 'mi-voz-entrenada');
+    soltarNA(); olvidarBloques();
+    actualizarBovedaUI();
+    $('#entNota').textContent = 'Tu voz ha sido destruida de forma segura y permanente.';
+    llenarNA();
+  };
 }
-$('#pcConectar').onclick = pcConectar;
-$('#pcEntrenar').onclick = pcEntrenar;
-$('#pcCancelar').onclick = pcCancelar;
-{ const c = pcConf(); if(c){ $('#pcDir').value = c.dir; $('#pcCodigo').value = c.codigo; setTimeout(() => pcRevisar(false), 5000); } }
-document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible' && pcConf() && PC.ultimo && PC.ultimo.estado === 'entrenando') pcRevisar(false); });
-$('#entArchivos').onchange = e => { const f = e.target.files; if(f && f.length) usarVozEntrenada(f).catch(err => $('#entNota').textContent = err.message || String(err)); e.target.value = ''; };
-$('#mvAcento').value = store.get('mvAcento', 'latino');
-$('#mvArranque').checked = arranqueMV();
-$('#mvArranque').onchange = e => store.set('mvArranque', e.target.checked);
-$('#mvAcento').onchange = e => {
+
+const inputEntArchivos = $('#entArchivos');
+if(inputEntArchivos){
+  inputEntArchivos.onchange = e => {
+    const f = e.target.files;
+    if(f && f.length) usarVozEntrenada(f);
+    e.target.value = '';
+  };
+}
+
+if(VOZ_SENSIBLE_ACTIVA){
+  if($('#recBtn')) $('#recBtn').onclick = avisoGrabacionDesactivada;
+  if($('#entGrabar')) $('#entGrabar').onclick = avisoGrabacionDesactivada;
+  if($('#entExportar')) $('#entExportar').onclick = exportarEnt;
+  if($('#entUsar')) $('#entUsar').onclick = avisoGrabacionDesactivada;
+}
+
+actualizarBovedaUI();
+if($('#mvAcento')) $('#mvAcento').value = store.get('mvAcento', 'latino');
+if($('#mvArranque')){ $('#mvArranque').checked = arranqueMV(); $('#mvArranque').onchange = e => store.set('mvArranque', e.target.checked); }
+if($('#mvAcento')) $('#mvAcento').onchange = e => {
   if(playing && esMiVoz()) stop();
   store.set('mvAcento', e.target.value); store.del('vozBase');
   MV.base = null; MV.cfg = null; MV.pref = null; olvidarBloques();
   diag('acento de «Mi voz»: ' + (e.target.value === 'espana' ? 'España' : 'latinoamericano'));
 };
-// Grabar con otra app (Notas de Voz) y elegir el archivo: funciona aunque el navegador no dé el micrófono.
-$('#recPick').onclick = ()=> $('#recFile').click();
-$('#recFile').onchange = async e => {
+$('#recBtn').onclick = async ()=>{
+  if(grabando){ grabando.terminar(); return; }
+  avisoMiVoz('');
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    avisoMiVoz('Este navegador no da acceso al micrófono. ' + ayudaMicrofono() + ' Mientras tanto, graba con Notas de Voz y toca «Usar un audio grabado».', true);
+    return;
+  }
+  if(!window.MediaRecorder){
+    avisoMiVoz('Este navegador no puede grabar desde la app. Graba con la app Notas de Voz del iPhone, compártelo a Archivos y toca «Usar un audio grabado».', true);
+    return;
+  }
+  let stream;
+  try{ stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1}}); }
+  catch(e){
+    const que = e && e.name === 'NotAllowedError' ? 'El navegador no dio permiso para el micrófono.' : 'No pude usar el micrófono (' + ((e && e.name) || 'error') + ').';
+    avisoMiVoz(que + ' ' + ayudaMicrofono() + ' También puedes grabar con Notas de Voz y tocar «Usar un audio grabado».', true);
+    return;
+  }
+  try{
+    $('#recLive').hidden = false; $('#recEmpty').hidden = false; $('#recDone').hidden = true;
+    const partes = [], rec = new MediaRecorder(stream);
+    rec.ondataavailable = e => { if(e.data.size) partes.push(e.data); };
+    const ctx = new (window.AudioContext || window.webkitAudioContext)(); ctx.resume().catch(()=>{});
+    const an = ctx.createAnalyser(); an.fftSize = 512; ctx.createMediaStreamSource(stream).connect(an);
+    const buf = new Uint8Array(an.fftSize), t0 = Date.now(); let raf;
+    // La duración sale del texto de prueba: así, si el texto se alarga, la grabación también
+    // (y la voz queda mejor: el timbre se saca de una muestra más larga).
+    const guion = ($('#recTexto') && $('#recTexto').textContent || '').trim();
+    const DUR = Math.max(30, Math.min(90, Math.round((guion.length || 600) / 12)));
+    const tic = ()=>{
+      an.getByteTimeDomainData(buf); let pk = 0; for(const v of buf) pk = Math.max(pk, Math.abs(v - 128));
+      $('#recLevel').style.width = Math.min(100, pk / 128 * 140) + '%';
+      const q = Math.max(0, DUR - Math.floor((Date.now() - t0) / 1000));
+      $('#recTime').textContent = `Grabando… ${q} s (toca «Terminar» si ya leíste todo)`;
+      if(q <= 0) terminar(); else raf = requestAnimationFrame(tic);
+    };
+    const terminar = ()=>{ if(rec.state !== 'inactive') rec.stop(); cancelAnimationFrame(raf); };
+    grabando = {terminar};
+    $('#recBtn').textContent = '■ Terminar';
+    rec.onstop = async ()=>{
+      stream.getTracks().forEach(t => t.stop()); grabando = null;
+      $('#recLive').hidden = true; $('#recBtn').textContent = 'Procesando…'; $('#recBtn').disabled = true;
+      try{
+        await guardarVoz(new Blob(partes, {type: rec.mimeType || 'audio/mp4'}), ctx);
+      }catch(e){ /* el aviso ya quedó en el panel */ }
+      finally{ try{ ctx.close(); }catch(e){} $('#recBtn').disabled = false;
+        $('#recBtn').textContent = store.get('vozSE') ? '● Grabar de nuevo' : '● Grabar mi voz'; actualizarMV(); }
+    };
+    rec.start(); tic();
+  }catch(e){
+    stream.getTracks().forEach(t => t.stop());
+    avisoMiVoz('No pude empezar a grabar (' + ((e && e.message) || e) + '). Usa «Usar un audio grabado».', true);
+  }
+};
+if($('#recPick')) $('#recPick').onclick = () => {
+  if(VOZ_SENSIBLE_ACTIVA) return avisoGrabacionDesactivada();
+  $('#recFile').click();
+};
+if($('#recFile')) $('#recFile').onchange = async e => {
   const f = e.target.files && e.target.files[0]; e.target.value = '';
   if(!f) return;
   avisoMiVoz('Leyendo «' + f.name + '»…');
@@ -2700,21 +2820,21 @@ $('#recFile').onchange = async e => {
   catch(err){ /* el aviso ya quedó en el panel */ }
   finally{ actualizarMV(); }
 };
-$('#recPlay').onclick = async ()=>{
+if($('#recPlay')) $('#recPlay').onclick = async ()=>{
   const b = await kv.get('voz', 'grabacion'); if(!b) return;
   new Audio(URL.createObjectURL(b)).play().catch(()=>{});
 };
-$('#mvTest').onclick = async ()=>{
+if($('#mvTest')) $('#mvTest').onclick = async ()=>{
   const btn = $('#mvTest'); btn.disabled = true;
   const prueba = new Audio(); prueba.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='; prueba.play().catch(()=>{});
   try{
-    $('#mvTestNote').textContent = 'Preparando la prueba (la primera vez descarga la voz)…';
-    await motorMV(avanceMV); $('#mvDescarga').textContent = '';
+    if($('#mvTestNote')) $('#mvTestNote').textContent = 'Preparando la prueba (la primera vez descarga la voz)…';
+    await motorMV(avanceMV); if($('#mvDescarga')) $('#mvDescarga').textContent = '';
     const b = MV.base.es;
     const a = await MV.M.convertir(await hablarBaseMV('Hola. Así suena mi voz leyendo mis libros, con calma y sin apuro.', 'es', b), b.se, MV.tgt);
     prueba.src = URL.createObjectURL(wav16(a)); prueba.playbackRate = rate; await prueba.play();
-    $('#mvTestNote').textContent = '';
-  }catch(e){ $('#mvTestNote').textContent = e.message || String(e); }
+    if($('#mvTestNote')) $('#mvTestNote').textContent = '';
+  }catch(e){ if($('#mvTestNote')) $('#mvTestNote').textContent = e.message || String(e); }
   finally{ btn.disabled = false; }
 };
 
@@ -2909,7 +3029,7 @@ function updateVoiceBtn(){
 }
 // Versión del código que está corriendo: sirve para saber si el teléfono se quedó con una copia vieja
 // (tiene que coincidir con CACHE en sw.js; si no coincide, cierra la app y vuelve a abrirla con internet).
-const VERSION_APP = 'v49';
+const VERSION_APP = 'v52';
 function verVersion(){
   const el = $('#verApp'); if(!el) return;
   if(!self.caches){ el.textContent = 'Versión de la app: ' + VERSION_APP; return; }
@@ -2941,7 +3061,8 @@ function openSheet(){
   setModo(modo); llenarNA();
   $('#diagTexto').textContent = store.get('diag', []).slice().reverse().join('\n') || 'Todavía no hay nada anotado.';
   verVersion(); verMiVoz();
-  if(modo === 'mivoz'){ cargarEnt().then(pintarEnt).catch(()=>{}); if(pcConf()) pcRevisar(true); }
+  // Las llamadas al Entrenador (pcConf/pcRevisar) no existían: rompían la apertura de esta ventana.
+  if(modo === 'mivoz' && VOZ_SENSIBLE_ACTIVA) cargarEnt().then(pintarEnt).catch(()=>{});
   if(modo === 'natural' && doc && !isAudioDoc()) discoNA().then(()=>{ mostrarAdelanto(); actualizarNA(); });
   $('#scrim').hidden = false; fillVoices();
 }
